@@ -2,6 +2,7 @@ local TAS_LIBRARY = {}
 
 function TAS_LIBRARY.getTAS(mapName)
     local tasData = nil
+    
         if mapName == "lobby_map_(test)" then
         tasData = {
             {type="keyframe",time=0.003305,cframe=CFrame.new(-24.903479,-147.000000,55.920662,0.995080,0.000000,-0.099077,0.000000,1.000000,0.000000,0.099077,0.000000,0.995080),velocity=Vector3.new(0.000000, 0.000416, 0.000000),slideActive=false,wallhopFlick=false},
@@ -5103,8 +5104,6 @@ function TAS_LIBRARY.getTAS(mapName)
             {type="keyframe",time=22.589145,cframe=CFrame.new(-25.887920,-147.000000,55.584705,0.148744,-0.000000,0.988876,0.000000,1.000000,0.000000,-0.988876,-0.000000,0.148744),velocity=Vector3.new(0.000000, 0.000416, 0.000000),slideActive=false,wallhopFlick=false},
             {type="keyframe",time=22.593435,cframe=CFrame.new(-25.887920,-147.000000,55.584705,0.148744,-0.000000,0.988876,0.000000,1.000000,0.000000,-0.988876,-0.000000,0.148744),velocity=Vector3.new(0.000000, 0.000416, 0.000000),slideActive=false,wallhopFlick=false},
         }
-    elseif mapName == "outro_mapa" then
-        tasData = { -- Outro bloco de TAS exportado }
     end
     return tasData
 end
