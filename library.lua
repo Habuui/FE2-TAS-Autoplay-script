@@ -3,7 +3,7 @@ local TAS_LIBRARY = {}
 function TAS_LIBRARY.getTAS(mapName)
     local tasData = nil
     -- Cole aqui os blocos EXPORTADOS pelo seu script, por exemplo:
-        elseif mapName == "walk_test_v1" then
+        if mapName == "walk_test_v1" then
         tasData = {
             {type="keyframe",time=0.004966,cframe=CFrame.new(-44.763866,-147.000000,38.253654,0.999124,0.000000,-0.041836,0.000000,1.000000,0.000000,0.041836,0.000000,0.999124),velocity=Vector3.new(0.000000, 0.000416, 0.000000),slideActive=false,wallhopFlick=false},
             {type="keyframe",time=0.008716,cframe=CFrame.new(-44.763866,-147.000000,38.253654,0.999124,0.000000,-0.041836,0.000000,1.000000,0.000000,0.041836,0.000000,0.999124),velocity=Vector3.new(0.000000, 0.000416, 0.000000),slideActive=false,wallhopFlick=false},
