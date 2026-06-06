@@ -1,0 +1,1182 @@
+--[[
+    FE2 TAS Recorder v15.5 - GITHUB LIBRARY + EXPORTAÇÃO (CORREÇÃO DE MATRIZ DE ROTAÇÃO)
+    Base: v15.4
+    Novidades e Correções:
+    - 🛠️ CORREÇÃO DE CRASH/GUI: Corrigido o erro de hierarquia onde main.Parent apontava para si mesmo.
+    - 🛠️ MATRIZ DE ROTAÇÃO CORRIGIDA: Alterado serializeCFrame para usar cf:GetComponents(), eliminando distorções de ângulo ao exportar.
+    - 🛠️ FIX HUMANOIDSTATE SPAM: Corrigida a leitura de estados vindo do GitHub para evitar travamentos de animação.
+]]
+
+local player = game.Players.LocalPlayer
+local uis = game:GetService("UserInputService")
+local rs = game:GetService("RunService")
+local hs = game:GetService("HttpService")
+local vim = game:GetService("VirtualInputManager")
+local ts = game:GetService("TweenService")
+
+-- ========== CONFIGURAÇÕES GLOBAIS ==========
+local DEFAULT_WALK_SPEED = 20
+local DEFAULT_JUMP_POWER = 50
+
+-- URL raw do library.lua no GitHub (altere para o seu)
+local LIBRARY_URL = "https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/library.lua"
+
+-- Mapeamento das teclas
+local KEYS = {
+    W = Enum.KeyCode.W,
+    A = Enum.KeyCode.A,
+    S = Enum.KeyCode.S,
+    D = Enum.KeyCode.D,
+    Space = Enum.KeyCode.Space,
+    E = Enum.KeyCode.E
+}
+
+-- ========== PERSISTÊNCIA ==========
+if not getgenv().FE2_TAS_SAVES then
+    getgenv().FE2_TAS_SAVES = {}
+end
+local savedTAS = getgenv().FE2_TAS_SAVES
+
+-- Destrói interface antiga
+local oldGui = player:WaitForChild("PlayerGui"):FindFirstChild("FE2_TAS_Recorder") or game.CoreGui:FindFirstChild("FE2_TAS_Recorder")
+if oldGui then oldGui:Destroy() end
+
+-- ========== ESTADO ==========
+local state = {
+    isRecording         = false,
+    currentTAS          = {},
+    currentMapName      = "",
+    isPlaying           = false,
+    playbackConnection  = nil,
+    recordingConnection = nil,
+    playbackStartTime   = 0,
+    wallclipEnabled     = true,
+    wallhopEnabled      = true,
+    lastPlaybackCall    = 0,
+    isMinimized         = false,
+    originalWalkSpeed   = DEFAULT_WALK_SPEED,
+    originalJumpPower   = DEFAULT_JUMP_POWER,
+    originalRootC0      = nil,
+    lastInputStates     = {W=false, A=false, S=false, D=false, Space=false, E=false},
+}
+
+-- ========== AUXILIARES VISUAIS ==========
+local function addStroke(parent, color, thickness)
+    local stroke = Instance.new("UIStroke")
+    stroke.Color = color
+    stroke.Thickness = thickness
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = parent
+    return stroke
+end
+
+local function applyShineStroke(instance, strokeColor, shineColor)
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1.5
+    stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+    stroke.Parent = instance
+
+    local gradient = Instance.new("UIGradient")
+    gradient.Color = ColorSequence.new({
+        ColorSequenceKeypoint.new(0,   strokeColor),
+        ColorSequenceKeypoint.new(0.4, strokeColor),
+        ColorSequenceKeypoint.new(0.5, shineColor),
+        ColorSequenceKeypoint.new(0.6, strokeColor),
+        ColorSequenceKeypoint.new(1,   strokeColor),
+    })
+    gradient.Parent = stroke
+
+    task.spawn(function()
+        while instance and instance.Parent do
+            gradient.Rotation = 0
+            local tween = ts:Create(gradient, TweenInfo.new(2.5, Enum.EasingStyle.Linear), {Rotation = 360})
+            tween:Play()
+            tween.Completed:Wait()
+        end
+    end)
+    return stroke
+end
+
+local function addHoverEffect(btn, normalCol, hoverCol)
+    btn.MouseEnter:Connect(function()  btn.BackgroundColor3 = hoverCol  end)
+    btn.MouseLeave:Connect(function()  btn.BackgroundColor3 = normalCol end)
+end
+
+local function isTyping()
+    return uis:GetFocusedTextBox() ~= nil
+end
+
+-- ========== SCREENGUI ==========
+local sg = Instance.new("ScreenGui")
+sg.Name = "FE2_TAS_Recorder"
+sg.ResetOnSpawn = false
+pcall(function() sg.Parent = player:WaitForChild("PlayerGui") end)
+if not sg.Parent then sg.Parent = game.CoreGui end
+
+local main = Instance.new("Frame")
+main.Size               = UDim2.new(0, 450, 0, 520)
+main.Position           = UDim2.new(0.5, -225, 0.5, -260)
+main.BackgroundColor3   = Color3.fromRGB(15, 16, 22)
+main.BackgroundTransparency = 0.1
+main.BorderSizePixel    = 0
+main.Active             = true
+main.Draggable          = true
+main.Visible            = true
+main.ClipsDescendants   = true
+main.Parent             = sg -- CORRIGIDO AQUI: Agora anexa corretamente à ScreenGui
+
+local mainCorner = Instance.new("UICorner")
+mainCorner.CornerRadius = UDim.new(0, 10)
+mainCorner.Parent       = main
+applyShineStroke(main, Color3.fromRGB(0, 140, 255), Color3.fromRGB(255, 255, 255))
+
+-- Barra de título
+local titleBar = Instance.new("Frame")
+titleBar.Size             = UDim2.new(1, 0, 0, 38)
+titleBar.BackgroundColor3 = Color3.fromRGB(24, 25, 35)
+titleBar.BorderSizePixel  = 0
+titleBar.Parent           = main
+
+local titleCorner = Instance.new("UICorner")
+titleCorner.CornerRadius = UDim.new(0, 10)
+titleCorner.Parent       = titleBar
+
+local titleText = Instance.new("TextLabel")
+titleText.Size             = UDim2.new(1, -50, 1, 0)
+titleText.Position         = UDim2.new(0, 12, 0, 0)
+titleText.BackgroundTransparency = 1
+titleText.Text             = "🎬 FE2 TAS HUD v15.5 (Corrigido)"
+titleText.TextColor3       = Color3.fromRGB(255, 255, 255)
+titleText.TextXAlignment   = Enum.TextXAlignment.Left
+titleText.Font             = Enum.Font.GothamBold
+titleText.TextSize         = 13
+titleText.Parent           = titleBar
+
+local closeBtn = Instance.new("TextButton")
+closeBtn.Size                = UDim2.new(0, 35, 1, 0)
+closeBtn.Position            = UDim2.new(1, -40, 0, 0)
+closeBtn.BackgroundTransparency = 1
+closeBtn.Text                = "━"
+closeBtn.TextColor3          = Color3.fromRGB(200, 200, 200)
+closeBtn.TextSize            = 18
+closeBtn.Font                = Enum.Font.GothamBold
+closeBtn.Parent              = titleBar
+
+closeBtn.MouseEnter:Connect(function() closeBtn.TextColor3 = Color3.fromRGB(255, 70, 70) end)
+closeBtn.MouseLeave:Connect(function() closeBtn.TextColor3 = Color3.fromRGB(200, 200, 200) end)
+
+-- ========== ABAS ==========
+local tabBar = Instance.new("Frame")
+tabBar.Size             = UDim2.new(1, 0, 0, 40)
+tabBar.Position         = UDim2.new(0, 0, 0, 38)
+tabBar.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
+tabBar.BorderSizePixel  = 0
+tabBar.Parent           = main
+
+local tabs        = {"🎮 Gravar", "💾 Saves", "🏃 Player", "📁 TAS Files", "🐛 Bugs"}
+local tabButtons  = {}
+local tabContents = {}
+local currentTabName = "🎮 Gravar"
+
+local function switchTab(tabName)
+    if state.isMinimized then return end
+    currentTabName = tabName
+    for i, content in pairs(tabContents) do
+        content.Visible = (tabs[i] == tabName)
+    end
+    for i, btn in pairs(tabButtons) do
+        if tabs[i] == tabName then
+            btn.BackgroundColor3 = Color3.fromRGB(48, 48, 68)
+            btn.TextColor3       = Color3.fromRGB(0, 210, 255)
+        else
+            btn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+            btn.TextColor3       = Color3.fromRGB(180, 180, 200)
+        end
+    end
+end
+
+for i, tabName in ipairs(tabs) do
+    local btn = Instance.new("TextButton")
+    btn.Size             = UDim2.new(0.2, -2, 1, -4)
+    btn.Position         = UDim2.new((i - 1) * 0.2, 1, 0, 2)
+    btn.BackgroundColor3 = (i == 1) and Color3.fromRGB(48, 48, 68) or Color3.fromRGB(28, 28, 38)
+    btn.Text             = tabName
+    btn.TextColor3       = (i == 1) and Color3.fromRGB(0, 210, 255) or Color3.fromRGB(180, 180, 200)
+    btn.Font             = Enum.Font.GothamBold
+    btn.TextSize         = 9
+    btn.Parent           = tabBar
+
+    local tabCorner = Instance.new("UICorner")
+    tabCorner.CornerRadius = UDim.new(0, 6)
+    tabCorner.Parent       = btn
+
+    tabButtons[i] = btn
+
+    local content = Instance.new("ScrollingFrame")
+    content.Size                 = UDim2.new(1, 0, 1, -78)
+    content.Position             = UDim2.new(0, 0, 0, 78)
+    content.BackgroundTransparency = 1
+    content.CanvasSize           = UDim2.new(0, 0, 0, 500)
+    content.ScrollBarThickness   = 3
+    content.ScrollBarImageColor3 = Color3.fromRGB(0, 160, 255)
+    content.Parent               = main
+    content.Visible              = (i == 1)
+    tabContents[i]               = content
+
+    btn.MouseButton1Click:Connect(function() switchTab(tabName) end)
+    btn.MouseEnter:Connect(function()
+        if currentTabName ~= tabName then btn.BackgroundColor3 = Color3.fromRGB(38, 38, 50) end
+    end)
+    btn.MouseLeave:Connect(function()
+        if currentTabName ~= tabName then btn.BackgroundColor3 = Color3.fromRGB(28, 28, 38) end
+    end)
+end
+
+-- ========== NOTIFICAÇÃO ==========
+local notifFrame = nil
+local function showNotif(msg, isGood, duration)
+    duration = duration or 2
+    if notifFrame then pcall(function() notifFrame:Destroy() end) end
+
+    notifFrame = Instance.new("Frame")
+    notifFrame.Size                 = UDim2.new(0, 380, 0, 45)
+    notifFrame.Position             = UDim2.new(0.5, -190, 0, 70)
+    notifFrame.BackgroundColor3     = isGood and Color3.fromRGB(15, 60, 35) or Color3.fromRGB(75, 20, 20)
+    notifFrame.BackgroundTransparency = 0.15
+    notifFrame.BorderSizePixel      = 0
+    notifFrame.ZIndex               = 10
+    notifFrame.Parent               = sg
+
+    local notifCorner = Instance.new("UICorner")
+    notifCorner.CornerRadius = UDim.new(0, 8)
+    notifCorner.Parent       = notifFrame
+
+    addStroke(notifFrame, isGood and Color3.fromRGB(0, 255, 120) or Color3.fromRGB(255, 70, 70), 1.2)
+
+    local label = Instance.new("TextLabel")
+    label.Size                = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.Text                = msg
+    label.TextColor3          = Color3.fromRGB(255, 255, 255)
+    label.Font                = Enum.Font.GothamBold
+    label.TextSize            = 12
+    label.ZIndex              = 11
+    label.Parent              = notifFrame
+
+    task.spawn(function()
+        task.wait(duration)
+        if notifFrame and notifFrame.Parent then
+            pcall(function() notifFrame:Destroy() end)
+        end
+    end)
+end
+
+-- ========== MINIMIZAR ==========
+local function toggleMinimize()
+    state.isMinimized = not state.isMinimized
+    if state.isMinimized then
+        main.Visible = false
+        showNotif("🙈 HUD Ocultado! Pressione N para exibir", true, 1.5)
+    else
+        main.Visible = true
+        switchTab(currentTabName)
+    end
+end
+
+local refreshSavedList
+
+-- ========== SALVAR / DELETAR TAS Local ==========
+local function saveTAS(name)
+    if #state.currentTAS < 10 then
+        showNotif("❌ Poucos frames para salvar!", false)
+        return false
+    end
+    if name == nil or name == "" then name = "TAS_" .. os.time() end
+
+    local finalName = name
+    local counter   = 1
+    while savedTAS[finalName] do
+        finalName = name .. "_" .. counter
+        counter   = counter + 1
+    end
+
+    savedTAS[finalName]       = state.currentTAS
+    getgenv().FE2_TAS_SAVES   = savedTAS
+    showNotif("💾 Salvo localmente: " .. finalName, true)
+    refreshSavedList()
+    return true
+end
+
+local function deleteTAS(name)
+    if savedTAS[name] then
+        savedTAS[name]          = nil
+        getgenv().FE2_TAS_SAVES = savedTAS
+        showNotif("🗑️ Deletado: " .. name, true)
+        refreshSavedList()
+    end
+end
+
+-- ========== GRAVAÇÃO ==========
+local recordingStartTime = 0
+local inputConnections   = nil
+
+local function startRecording()
+    if state.isRecording then showNotif("❌ Já gravando!", false); return end
+    if state.isPlaying then
+        state.isPlaying = false
+        if state.playbackConnection then
+            state.playbackConnection:Disconnect()
+            state.playbackConnection = nil
+        end
+    end
+
+    state.currentTAS     = {}
+    state.currentMapName = ""
+    state.isRecording    = true
+    recordingStartTime   = tick()
+
+    for k in pairs(state.lastInputStates) do state.lastInputStates[k] = false end
+    showNotif("🔴 GRAVAÇÃO INICIADA! Pressione G para parar", true)
+
+    local kfConn = rs.Stepped:Connect(function()
+        if not state.isRecording then return end
+        local char = player.Character
+        if char and char:FindFirstChild("HumanoidRootPart") and char:FindFirstChild("Humanoid") then
+            local hrp      = char.HumanoidRootPart
+            local humanoid = char.Humanoid
+            table.insert(state.currentTAS, {
+                type         = "keyframe",
+                time         = tick() - recordingStartTime,
+                cframe       = hrp.CFrame,
+                velocity     = hrp.Velocity,
+                moveDirection= humanoid.MoveDirection,
+                humanoidState= humanoid:GetState(),
+                slideActive  = uis:IsKeyDown(Enum.KeyCode.E),
+            })
+        end
+    end)
+
+    local function onInputBegan(input, gpe)
+        if not state.isRecording or gpe then return end
+        for name, code in pairs(KEYS) do
+            if input.KeyCode == code and not state.lastInputStates[name] then
+                state.lastInputStates[name] = true
+                table.insert(state.currentTAS, {
+                    type  = "input",
+                    time  = tick() - recordingStartTime,
+                    key   = name,
+                    state = true,
+                })
+            end
+        end
+    end
+
+    local function onInputEnded(input, gpe)
+        if not state.isRecording or gpe then return end
+        for name, code in pairs(KEYS) do
+            if input.KeyCode == code and state.lastInputStates[name] then
+                state.lastInputStates[name] = false
+                table.insert(state.currentTAS, {
+                    type  = "input",
+                    time  = tick() - recordingStartTime,
+                    key   = name,
+                    state = false,
+                })
+            end
+        end
+    end
+
+    local ibConn = uis.InputBegan:Connect(onInputBegan)
+    local ieConn = uis.InputEnded:Connect(onInputEnded)
+    inputConnections      = {kfConn, ibConn, ieConn}
+    state.recordingConnection = inputConnections
+end
+
+local function stopRecording()
+    if not state.isRecording then return end
+    state.isRecording = false
+    if state.recordingConnection then
+        for _, conn in ipairs(state.recordingConnection) do
+            if conn then pcall(function() conn:Disconnect() end) end
+        end
+        state.recordingConnection = nil
+    end
+    table.sort(state.currentTAS, function(a, b) return a.time < b.time end)
+    if #state.currentTAS > 10 then
+        showNotif("⏹️ Gravação concluída! (" .. #state.currentTAS .. " eventos)", true)
+    else
+        showNotif("⚠️ Poucos eventos gravados!", false)
+        state.currentTAS = {}
+    end
+end
+
+-- ========== RESTAURAR CONTROLE ==========
+local function restoreCharacterControl()
+    if state.isPlaying then
+        state.isPlaying = false
+        if state.playbackConnection then
+            pcall(function() state.playbackConnection:Disconnect() end)
+            state.playbackConnection = nil
+        end
+    end
+    for _, code in pairs(KEYS) do
+        pcall(function() vim:SendKeyEvent(false, code, false, game) end)
+    end
+    local char = player.Character
+    if char then
+        local humanoid = char:FindFirstChild("Humanoid")
+        if humanoid then
+            humanoid.WalkSpeed = DEFAULT_WALK_SPEED
+            humanoid.JumpPower = DEFAULT_JUMP_POWER
+            humanoid.AutoRotate = true
+        end
+        if state.originalRootC0 then
+            local rj = char:FindFirstChild("RootJoint", true)
+            if rj then pcall(function() rj.C0 = state.originalRootC0 end) end
+            state.originalRootC0 = nil
+        end
+    end
+end
+
+local function interruptPlayback()
+    if not state.isPlaying then return end
+    state.isPlaying = false
+    if state.playbackConnection then
+        pcall(function() state.playbackConnection:Disconnect() end)
+        state.playbackConnection = nil
+    end
+    restoreCharacterControl()
+    showNotif("⏹️ Reprodução cancelada!", false, 2)
+end
+
+-- ========== REPRODUÇÃO HÍBRIDA ==========
+local function startPlayback()
+    local now = tick()
+    if now - state.lastPlaybackCall < 0.5 then return end
+    state.lastPlaybackCall = now
+
+    if #state.currentTAS == 0 then showNotif("❌ Nenhum TAS carregado!", false); return end
+    if state.isPlaying then interruptPlayback(); task.wait(0.05) end
+
+    local char = player.Character
+    if not char then return end
+    local hrp      = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not hrp or not humanoid then return end
+
+    state.originalWalkSpeed = humanoid.WalkSpeed
+    state.originalJumpPower = humanoid.JumpPower
+    humanoid.WalkSpeed = DEFAULT_WALK_SPEED
+    humanoid.JumpPower = DEFAULT_JUMP_POWER
+    humanoid.AutoRotate = false
+
+    local rootJoint = char:FindFirstChild("RootJoint", true)
+    if rootJoint then state.originalRootC0 = rootJoint.C0 else state.originalRootC0 = nil end
+
+    local firstKF = nil
+    for _, ev in ipairs(state.currentTAS) do
+        if ev.type == "keyframe" then firstKF = ev; break end
+    end
+    if firstKF and firstKF.cframe then
+        hrp.CFrame   = firstKF.cframe
+        hrp.Velocity = Vector3.zero
+    end
+
+    task.wait(0.1)
+
+    char = player.Character
+    if not char or not char:FindFirstChild("HumanoidRootPart") or not char:FindFirstChild("Humanoid") then
+        restoreCharacterControl(); return
+    end
+
+    state.isPlaying        = true
+    state.playbackStartTime= tick()
+    local eventIndex       = 1
+    local totalEvents      = #state.currentTAS
+    local lastSlideState   = false
+    local lastApplied      = {}
+    for k in pairs(KEYS) do lastApplied[k] = false end
+    local wallhopProcessed = false
+    local isFlicking       = false
+
+    showNotif("▶️ REPRODUZINDO...", true)
+
+    state.playbackConnection = rs.Stepped:Connect(function()
+        if not state.isPlaying then return end
+        local cc = player.Character
+        if not cc or not cc:FindFirstChild("HumanoidRootPart") or not cc:FindFirstChild("Humanoid") then
+            restoreCharacterControl()
+            showNotif("❌ Personagem interrompido.", false)
+            return
+        end
+        local ch    = cc.HumanoidRootPart
+        local hum   = cc.Humanoid
+        local elapsed = tick() - state.playbackStartTime
+
+        while eventIndex <= totalEvents and state.currentTAS[eventIndex].time <= elapsed do
+            local ev = state.currentTAS[eventIndex]
+
+            if ev.type == "keyframe" then
+                if ev.cframe   then ch.CFrame   = ev.cframe end
+                if ev.velocity then
+                    ch.Velocity             = ev.velocity
+                    ch.AssemblyLinearVelocity = ev.velocity
+                end
+                
+                if ev.humanoidState then
+                    local currentEnum = hum:GetState()
+                    local isDifferent = false
+                    if type(ev.humanoidState) == "number" then
+                        isDifferent = (currentEnum.Value ~= ev.humanoidState)
+                    else
+                        isDifferent = (currentEnum ~= ev.humanoidState)
+                    end
+                    if isDifferent then
+                        hum:ChangeState(ev.humanoidState)
+                    end
+                end
+
+                if hum.WalkSpeed ~= DEFAULT_WALK_SPEED then hum.WalkSpeed = DEFAULT_WALK_SPEED end
+
+                if ev.slideActive ~= nil and ev.slideActive ~= lastSlideState then
+                    lastSlideState = ev.slideActive
+                    vim:SendKeyEvent(ev.slideActive, Enum.KeyCode.E, false, game)
+                end
+
+                if state.wallhopEnabled and ev.wallhopFlick and not wallhopProcessed and not isFlicking then
+                    wallhopProcessed = true
+                    isFlicking       = true
+                    task.spawn(function()
+                        if hum and hum.Parent then
+                            hum:ChangeState(Enum.HumanoidStateType.Jumping)
+                            task.wait(0.05)
+                            ch.Velocity = Vector3.new(ch.Velocity.X, 40, ch.Velocity.Z)
+                            local rj = cc:FindFirstChild("RootJoint", true)
+                            if rj and state.originalRootC0 then
+                                local orig = state.originalRootC0
+                                pcall(function() rj.C0 = orig * CFrame.Angles(0, 0, math.rad(65)) end)
+                                task.wait(0.08)
+                                pcall(function() if rj and rj.Parent then rj.C0 = orig end end)
+                            end
+                        end
+                        isFlicking = false
+                    end)
+                elseif not ev.wallhopFlick then
+                    wallhopProcessed = false
+                end
+
+            elseif ev.type == "input" then
+                local keyCode = KEYS[ev.key]
+                if keyCode and lastApplied[ev.key] ~= ev.state then
+                    lastApplied[ev.key] = ev.state
+                    pcall(function() vim:SendKeyEvent(ev.state, keyCode, false, game) end)
+                end
+            end
+
+            eventIndex = eventIndex + 1
+        end
+
+        if eventIndex > totalEvents then
+            for key, code in pairs(KEYS) do
+                if lastApplied[key] then
+                    pcall(function() vim:SendKeyEvent(false, code, false, game) end)
+                end
+            end
+            if lastSlideState then vim:SendKeyEvent(false, Enum.KeyCode.E, false, game) end
+
+            state.isPlaying = false
+            if state.playbackConnection then
+                state.playbackConnection:Disconnect()
+                state.playbackConnection = nil
+            end
+            restoreCharacterControl()
+            showNotif("✅ REPRODUÇÃO FINALIZADA!", true, 2.5)
+        end
+    end)
+end
+
+-- ========== RESET ==========
+local function forceReset()
+    if state.isRecording then stopRecording() end
+    if state.isPlaying    then interruptPlayback() end
+    state.currentTAS     = {}
+    state.currentMapName = ""
+    showNotif("🔄 Estado limpo!", true, 1.5)
+end
+
+-- ========== WALLCLIP ==========
+local function fakeWallclip()
+    if not state.wallclipEnabled then return end
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {char}
+
+    local ray = workspace:Raycast(hrp.Position, hrp.CFrame.LookVector * 2.5, params)
+    if ray and ray.Distance < 2.2 then
+        hrp.CFrame = CFrame.new(hrp.Position + hrp.CFrame.LookVector * 5)
+        showNotif("🌀 WALLCLIP!", true, 0.8)
+    end
+end
+
+-- ========== WALLHOP MANUAL ==========
+local function fakeWallhop()
+    if not state.wallhopEnabled then return end
+    local char = player.Character
+    if not char then return end
+    local hrp      = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChild("Humanoid")
+    if not hrp or not humanoid then return end
+
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Exclude
+    params.FilterDescendantsInstances = {char}
+
+    local ray = workspace:Raycast(hrp.Position, hrp.CFrame.LookVector * 2, params)
+    if ray and ray.Distance < 1.8 then
+        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+        task.wait(0.05)
+        hrp.Velocity = Vector3.new(hrp.Velocity.X, 40, hrp.Velocity.Z)
+        if state.isRecording and #state.currentTAS > 0 then
+            for i = #state.currentTAS, 1, -1 do
+                if state.currentTAS[i].type == "keyframe" then
+                    state.currentTAS[i].wallhopFlick = true
+                    break
+                end
+            end
+        end
+        task.spawn(function()
+            local rj = char:FindFirstChild("RootJoint", true)
+            if rj then
+                local orig = rj.C0
+                pcall(function() rj.C0 = orig * CFrame.Angles(0, 0, math.rad(65)) end)
+                task.wait(0.08)
+                pcall(function() if rj and rj.Parent then rj.C0 = orig end end)
+            end
+        end)
+        showNotif("🚀 WALLHOP!", true, 0.8)
+    end
+end
+
+-- ========== EXPORTAÇÃO CORRIGIDA ==========
+local function serializeVector3(v)
+    return string.format("Vector3.new(%f, %f, %f)", v.X, v.Y, v.Z)
+end
+
+local function serializeCFrame(cf)
+    return string.format("CFrame.new(%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f,%f)", cf:GetComponents())
+end
+
+local function exportCurrentTAS(mapName)
+    if not state.currentTAS or #state.currentTAS == 0 then
+        showNotif("❌ Nenhum TAS na memória para exportar!", false, 2)
+        return
+    end
+    if not mapName or mapName == "" then mapName = "mapa_desconhecido" end
+    local lines = {}
+    table.insert(lines, "    if mapName == \"" .. mapName .. "\" then")
+    table.insert(lines, "        tasData = {")
+    for _, ev in ipairs(state.currentTAS) do
+        if ev.type == "keyframe" then
+            local cfStr = serializeCFrame(ev.cframe)
+            local velStr = serializeVector3(ev.velocity)
+            local slideStr = tostring(ev.slideActive or false)
+            local flickStr = tostring(ev.wallhopFlick or false)
+            local hStateStr = ev.humanoidState and tostring(ev.humanoidState.Value) or "Enum.HumanoidStateType.Running.Value"
+            local kfLine = string.format('            {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%s},', ev.time, cfStr, velStr, slideStr, flickStr, hStateStr)
+            table.insert(lines, kfLine)
+        elseif ev.type == "input" then
+            local inputLine = string.format('            {type="input",time=%f,key="%s",state=%s},', ev.time, ev.key, tostring(ev.state))
+            table.insert(lines, inputLine)
+        end
+    end
+    table.insert(lines, "        }")
+    table.insert(lines, "    end")
+    local output = table.concat(lines, "\n")
+    local copied = false
+    if setclipboard then
+        pcall(function() setclipboard(output); copied = true end)
+    elseif toclipboard then
+        pcall(function() toclipboard(output); copied = true end)
+    end
+    if copied then
+        showNotif("📤 Bloco do mapa copiado! Pronto para colar no library.lua", true, 3)
+    else
+        print("\n=== COPIE O TEXTO ABAIXO PARA O SEU LIBRARY.LUA ===\n")
+        print(output)
+        print("\n==================================================\n")
+        showNotif("⚠️ setclipboard não suportado! Bloco impresso no F9.", false, 4)
+    end
+end
+
+-- ========== CARREGAR LIBRARY.LUA DO GITHUB ==========
+local loadedLibrary = nil
+local availableMaps = {}
+local refreshGitList
+
+local function extractMapNamesFromCode(code)
+    local maps = {}
+    for name in code:gmatch('mapName%s*==%s*"([^"]+)"') do
+        table.insert(maps, name)
+    end
+    return maps
+end
+
+local function loadLibraryFromGitHub()
+    showNotif("⏳ Baixando library.lua do GitHub...", true, 2)
+    task.spawn(function()
+        local ok, code = pcall(function() return game:HttpGet(LIBRARY_URL, true) end)
+        if not ok or not code or code == "" then
+            showNotif("❌ Falha ao acessar o GitHub. Verifique a URL.", false, 3)
+            return
+        end
+        availableMaps = extractMapNamesFromCode(code)
+        local execOk, lib = pcall(function() return loadstring(code)() end)
+        if execOk and type(lib) == "table" then
+            loadedLibrary = lib
+            showNotif("✅ Library carregada! " .. #availableMaps .. " mapa(s) disponível(is).", true, 2.5)
+        else
+            loadedLibrary = nil
+            showNotif("⚠️ " .. #availableMaps .. " mapa(s) encontrado(s) (somente leitura).", true, 2.5)
+        end
+        refreshGitList()
+    end)
+end
+
+-- ========== UI - ABA GRAVAR (tab 1) ==========
+local grabContainer = tabContents[1]
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(1, -20, 0, 35)
+statusLabel.Position = UDim2.new(0, 10, 0, 10)
+statusLabel.BackgroundTransparency = 1
+statusLabel.Text = "⚫ Nenhuma gravação"
+statusLabel.TextColor3 = Color3.fromRGB(180, 180, 220)
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextSize = 12
+statusLabel.TextXAlignment = Enum.TextXAlignment.Left
+statusLabel.Parent = grabContainer
+
+local frameLabel = Instance.new("TextLabel")
+frameLabel.Size = UDim2.new(1, -20, 0, 25)
+frameLabel.Position = UDim2.new(0, 10, 0, 50)
+frameLabel.BackgroundTransparency = 1
+frameLabel.Text = "📹 Eventos na Memória: 0"
+frameLabel.TextColor3 = Color3.fromRGB(140, 140, 160)
+frameLabel.Font = Enum.Font.Gotham
+frameLabel.TextSize = 11
+frameLabel.TextXAlignment = Enum.TextXAlignment.Left
+frameLabel.Parent = grabContainer
+
+local recBtn = Instance.new("TextButton")
+recBtn.Size = UDim2.new(0.8, 0, 0, 40)
+recBtn.Position = UDim2.new(0.1, 0, 0, 90)
+recBtn.BackgroundColor3 = Color3.fromRGB(140, 20, 20)
+recBtn.Text = "🔴 INICIAR GRAVAÇÃO (G)"
+recBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+recBtn.Font = Enum.Font.GothamBold
+recBtn.TextSize = 13
+recBtn.Parent = grabContainer
+Instance.new("UICorner", recBtn).CornerRadius = UDim.new(0, 8)
+addHoverEffect(recBtn, Color3.fromRGB(140, 20, 20), Color3.fromRGB(180, 30, 30))
+applyShineStroke(recBtn, Color3.fromRGB(100, 10, 10), Color3.fromRGB(255, 100, 100))
+
+local stopRecBtn = Instance.new("TextButton")
+stopRecBtn.Size = UDim2.new(0.8, 0, 0, 40)
+stopRecBtn.Position = UDim2.new(0.1, 0, 0, 145)
+stopRecBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
+stopRecBtn.Text = "⏹️ PARAR GRAVAÇÃO (G)"
+stopRecBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
+stopRecBtn.Font = Enum.Font.GothamBold
+stopRecBtn.TextSize = 12
+stopRecBtn.Parent = grabContainer
+Instance.new("UICorner", stopRecBtn).CornerRadius = UDim.new(0, 8)
+addHoverEffect(stopRecBtn, Color3.fromRGB(45, 45, 55), Color3.fromRGB(60, 60, 75))
+addStroke(stopRecBtn, Color3.fromRGB(80, 80, 95), 1)
+
+local playBtn = Instance.new("TextButton")
+playBtn.Size = UDim2.new(0.8, 0, 0, 40)
+playBtn.Position = UDim2.new(0.1, 0, 0, 200)
+playBtn.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
+playBtn.Text = "▶️ REPRODUZIR GRAVAÇÃO (R)"
+playBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+playBtn.Font = Enum.Font.GothamBold
+playBtn.TextSize = 13
+playBtn.Parent = grabContainer
+Instance.new("UICorner", playBtn).CornerRadius = UDim.new(0, 8)
+addHoverEffect(playBtn, Color3.fromRGB(20, 120, 60), Color3.fromRGB(30, 160, 80))
+addStroke(playBtn, Color3.fromRGB(10, 80, 40), 1)
+
+local mapInput = Instance.new("TextBox")
+mapInput.Size = UDim2.new(0.8, 0, 0, 35)
+mapInput.Position = UDim2.new(0.1, 0, 0, 265)
+mapInput.BackgroundColor3 = Color3.fromRGB(22, 23, 30)
+mapInput.Text = ""
+mapInput.PlaceholderText = "Nome do mapa para exportar..."
+mapInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+mapInput.Font = Enum.Font.Gotham
+mapInput.TextSize = 11
+mapInput.Parent = grabContainer
+Instance.new("UICorner", mapInput).CornerRadius = UDim.new(0, 6)
+addStroke(mapInput, Color3.fromRGB(45, 45, 60), 1)
+
+local expBtn = Instance.new("TextButton")
+expBtn.Size = UDim2.new(0.8, 0, 0, 38)
+expBtn.Position = UDim2.new(0.1, 0, 0, 310)
+expBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 180)
+expBtn.Text = "📤 EXPORTAR TAS (Pronto p/ Library)"
+expBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+expBtn.Font = Enum.Font.GothamBold
+expBtn.TextSize = 12
+expBtn.Parent = grabContainer
+Instance.new("UICorner", expBtn).CornerRadius = UDim.new(0, 8)
+addHoverEffect(expBtn, Color3.fromRGB(0, 100, 180), Color3.fromRGB(0, 130, 220))
+
+local clearBtn = Instance.new("TextButton")
+clearBtn.Size = UDim2.new(0.8, 0, 0, 35)
+clearBtn.Position = UDim2.new(0.1, 0, 0, 365)
+clearBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
+clearBtn.Text = "🗑️ LIMPAR ESTADO"
+clearBtn.TextColor3 = Color3.fromRGB(200, 140, 140)
+clearBtn.Font = Enum.Font.GothamBold
+clearBtn.TextSize = 11
+clearBtn.Parent = grabContainer
+Instance.new("UICorner", clearBtn).CornerRadius = UDim.new(0, 8)
+addHoverEffect(clearBtn, Color3.fromRGB(35, 35, 42), Color3.fromRGB(50, 40, 48))
+
+task.spawn(function()
+    while task.wait(0.2) do
+        if state.isRecording then
+            statusLabel.Text = "🔴 GRAVANDO TAS..."
+            statusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
+        elseif state.isPlaying then
+            statusLabel.Text = "▶️ REPRODUZINDO TAS..."
+            statusLabel.TextColor3 = Color3.fromRGB(50, 255, 120)
+        else
+            statusLabel.Text = "⚫ Parado"
+            statusLabel.TextColor3 = Color3.fromRGB(180, 180, 220)
+        end
+        frameLabel.Text = "📹 Eventos na Memória: " .. #state.currentTAS
+    end
+end)
+
+recBtn.MouseButton1Click:Connect(startRecording)
+stopRecBtn.MouseButton1Click:Connect(stopRecording)
+playBtn.MouseButton1Click:Connect(startPlayback)
+expBtn.MouseButton1Click:Connect(function() exportCurrentTAS(mapInput.Text) end)
+clearBtn.MouseButton1Click:Connect(forceReset)
+
+-- ========== UI - ABA SAVES LOCAIS (tab 2) ==========
+local savesContainer = tabContents[2]
+local saveNameInput = Instance.new("TextBox")
+saveNameInput.Size = UDim2.new(0.5, -15, 0, 35)
+saveNameInput.Position = UDim2.new(0, 10, 0, 10)
+saveNameInput.BackgroundColor3 = Color3.fromRGB(22, 23, 30)
+saveNameInput.Text = ""
+saveNameInput.PlaceholderText = "Nome do Save..."
+saveNameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
+saveNameInput.Font = Enum.Font.Gotham
+saveNameInput.TextSize = 11
+saveNameInput.Parent = savesContainer
+Instance.new("UICorner", saveNameInput).CornerRadius = UDim.new(0, 6)
+addStroke(saveNameInput, Color3.fromRGB(45, 45, 60), 1)
+
+local saveBtn = Instance.new("TextButton")
+saveBtn.Size = UDim2.new(0.5, -15, 0, 35)
+saveBtn.Position = UDim2.new(0.5, 5, 0, 10)
+saveBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 70)
+saveBtn.Text = "💾 SALVAR ATUAL"
+saveBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+saveBtn.Font = Enum.Font.GothamBold
+saveBtn.TextSize = 11
+saveBtn.Parent = savesContainer
+Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 6)
+
+local listScroll = Instance.new("ScrollingFrame")
+listScroll.Size = UDim2.new(1, -20, 1, -60)
+listScroll.Position = UDim2.new(0, 10, 0, 55)
+listScroll.BackgroundTransparency = 1
+listScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+listScroll.ScrollBarThickness = 2
+listScroll.Parent = savesContainer
+
+local listLayout = Instance.new("UIListLayout")
+listLayout.Padding = UDim.new(0, 5)
+listLayout.Parent = listScroll
+
+function refreshSavedList()
+    for _, c in ipairs(listScroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    local index = 0
+    for name, data in pairs(savedTAS) do
+        index = index + 1
+        local item = Instance.new("Frame")
+        item.Size = UDim2.new(1, 0, 0, 40)
+        item.BackgroundColor3 = Color3.fromRGB(22, 24, 32)
+        item.BorderSizePixel = 0
+        item.Parent = listScroll
+        Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(0.5, 0, 1, 0)
+        lbl.Position = UDim2.new(0, 8, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = name .. " (" .. #data .. " ev)"
+        lbl.TextColor3 = Color3.fromRGB(220, 220, 240)
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 10
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = item
+
+        local loadB = Instance.new("TextButton")
+        loadB.Size = UDim2.new(0.22, 0, 0.8, 0)
+        loadB.Position = UDim2.new(0.52, 0, 0.1, 0)
+        loadB.BackgroundColor3 = Color3.fromRGB(30, 80, 140)
+        loadB.Text = "Carregar"
+        loadB.TextColor3 = Color3.fromRGB(255, 255, 255)
+        loadB.Font = Enum.Font.GothamBold
+        loadB.TextSize = 9
+        loadB.Parent = item
+        Instance.new("UICorner", loadB).CornerRadius = UDim.new(0, 4)
+
+        local delB = Instance.new("TextButton")
+        delB.Size = UDim2.new(0.22, 0, 0.8, 0)
+        delB.Position = UDim2.new(0.76, 0, 0.1, 0)
+        delB.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
+        delB.Text = "Deletar"
+        delB.TextColor3 = Color3.fromRGB(255, 255, 255)
+        delB.Font = Enum.Font.GothamBold
+        delB.TextSize = 9
+        delB.Parent = item
+        Instance.new("UICorner", delB).CornerRadius = UDim.new(0, 4)
+
+        loadB.MouseButton1Click:Connect(function()
+            state.currentTAS = data
+            state.currentMapName = name
+            showNotif("📂 Carregado para memória: " .. name, true)
+        end)
+        delB.MouseButton1Click:Connect(function() deleteTAS(name) end)
+    end
+    listScroll.CanvasSize = UDim2.new(0, 0, 0, index * 45)
+end
+
+saveBtn.MouseButton1Click:Connect(function()
+    if saveTAS(saveNameInput.Text) then saveNameInput.Text = "" end
+end)
+
+-- ========== UI - ABA PLAYER CONFIG (tab 3) ==========
+local plyContainer = tabContents[3]
+
+local wcToggle = Instance.new("TextButton")
+wcToggle.Size = UDim2.new(0.8, 0, 0, 40)
+wcToggle.Position = UDim2.new(0.1, 0, 0, 20)
+wcToggle.Font = Enum.Font.GothamBold
+wcToggle.TextSize = 12
+wcToggle.Parent = plyContainer
+Instance.new("UICorner", wcToggle).CornerRadius = UDim.new(0, 8)
+
+local whToggle = Instance.new("TextButton")
+whToggle.Size = UDim2.new(0.8, 0, 0, 40)
+whToggle.Position = UDim2.new(0.1, 0, 0, 75)
+whToggle.Font = Enum.Font.GothamBold
+whToggle.TextSize = 12
+whToggle.Parent = plyContainer
+Instance.new("UICorner", whToggle).CornerRadius = UDim.new(0, 8)
+
+local function updateWcBtnState()
+    wcToggle.BackgroundColor3 = state.wallclipEnabled and Color3.fromRGB(30, 100, 60) or Color3.fromRGB(100, 30, 30)
+    wcToggle.Text = state.wallclipEnabled and "🌀 WALLCLIP MANUAL: ATIVADO (Ctrl)" or "🌀 WALLCLIP MANUAL: DESATIVADO"
+end
+
+local function updateWhBtnState()
+    whToggle.BackgroundColor3 = state.wallhopEnabled and Color3.fromRGB(30, 100, 60) or Color3.fromRGB(100, 30, 30)
+    whToggle.Text = state.wallhopEnabled and "🚀 WALLHOP AUTOMÁTICO: ATIVADO (Espaço)" or "🚀 WALLHOP AUTOMÁTICO: DESATIVADO"
+end
+
+wcToggle.MouseButton1Click:Connect(function()
+    state.wallclipEnabled = not state.wallclipEnabled
+    updateWcBtnState()
+end)
+
+whToggle.MouseButton1Click:Connect(function()
+    state.wallhopEnabled = not state.wallhopEnabled
+    updateWhBtnState()
+end)
+
+-- ========== UI - ABA GITHUB LIBRARY (tab 4) ==========
+local gitContainer = tabContents[4]
+
+local gitRefreshBtn = Instance.new("TextButton")
+gitRefreshBtn.Size = UDim2.new(0.8, 0, 0, 35)
+gitRefreshBtn.Position = UDim2.new(0.1, 0, 0, 10)
+gitRefreshBtn.BackgroundColor3 = Color3.fromRGB(90, 30, 140)
+gitRefreshBtn.Text = "🔄 REFRESH GITHUB LIBRARY"
+gitRefreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+gitRefreshBtn.Font = Enum.Font.GothamBold
+gitRefreshBtn.TextSize = 11
+gitRefreshBtn.Parent = gitContainer
+Instance.new("UICorner", gitRefreshBtn).CornerRadius = UDim.new(0, 6)
+
+local gitScroll = Instance.new("ScrollingFrame")
+gitScroll.Size = UDim2.new(1, -20, 1, -60)
+gitScroll.Position = UDim2.new(0, 10, 0, 55)
+gitScroll.BackgroundTransparency = 1
+gitScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+gitScroll.ScrollBarThickness = 2
+gitScroll.Parent = gitContainer
+
+local gitLayout = Instance.new("UIListLayout")
+gitLayout.Padding = UDim.new(0, 5)
+gitLayout.Parent = gitScroll
+
+function refreshGitList()
+    for _, c in ipairs(gitScroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    if #availableMaps == 0 then
+        local empty = Instance.new("TextLabel")
+        empty.Size = UDim2.new(1, 0, 0, 40)
+        empty.BackgroundTransparency = 1
+        empty.Text = "Nenhum mapa localizado na library.lua."
+        empty.TextColor3 = Color3.fromRGB(130, 130, 150)
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 11
+        empty.Parent = gitScroll
+        gitScroll.CanvasSize = UDim2.new(0, 0, 0, 45)
+        return
+    end
+
+    for i, mapName in ipairs(availableMaps) do
+        local item = Instance.new("Frame")
+        item.Size = UDim2.new(1, 0, 0, 40)
+        item.BackgroundColor3 = Color3.fromRGB(20, 26, 35)
+        item.BorderSizePixel = 0
+        item.Parent = gitScroll
+        Instance.new("UICorner", item).CornerRadius = UDim.new(0, 6)
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Size = UDim2.new(0.65, 0, 1, 0)
+        lbl.Position = UDim2.new(0, 8, 0, 0)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = "🗺️ " .. mapName
+        lbl.TextColor3 = Color3.fromRGB(200, 220, 255)
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 10
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Parent = item
+
+        local loadB = Instance.new("TextButton")
+        loadB.Size = UDim2.new(0.25, 0, 0.8, 0)
+        loadB.Position = UDim2.new(0.72, 0, 0.1, 0)
+        loadB.BackgroundColor3 = Color3.fromRGB(0, 120, 150)
+        loadB.Text = "Carregar"
+        loadB.TextColor3 = Color3.fromRGB(255, 255, 255)
+        loadB.Font = Enum.Font.GothamBold
+        loadB.TextSize = 9
+        loadB.Parent = item
+        Instance.new("UICorner", loadB).CornerRadius = UDim.new(0, 4)
+
+        loadB.MouseButton1Click:Connect(function()
+            if loadedLibrary and loadedLibrary.getTAS then
+                local data = loadedLibrary.getTAS(mapName)
+                if data and #data > 0 then
+                    state.currentTAS = data
+                    state.currentMapName = mapName
+                    showNotif("📥 Carregado do Git: " .. mapName, true)
+                else
+                    showNotif("❌ Tabela vazia ou método inválido!", false)
+                end
+            else
+                showNotif("⏳ Buscando código puro do GitHub...", true, 1.5)
+                task.spawn(function()
+                    local ok, code = pcall(function() return game:HttpGet(LIBRARY_URL, true) end)
+                    if ok and code then
+                        local tasData = nil
+                        local funcStr = code .. "\nreturn TAS_LIBRARY.getTAS('" .. mapName .. "')"
+                        local execOk, res = pcall(function() return loadstring(funcStr)() end)
+                        if execOk and res and type(res) == "table" then
+                            state.currentTAS = res
+                            state.currentMapName = mapName
+                            showNotif("✅ Mapa carregado via fallback!", true)
+                        else
+                            showNotif("❌ Erro ao decodificar a tabela.", false)
+                        end
+                    end
+                end)
+            end
+        end)
+    end
+    gitScroll.CanvasSize = UDim2.new(0, 0, 0, #availableMaps * 45)
+end
+
+gitRefreshBtn.MouseButton1Click:Connect(loadLibraryFromGitHub)
+
+-- ========== UI - ABA BUG RESOLVER (tab 5) ==========
+local bugContainer = tabContents[5]
+
+local bugTitle = Instance.new("TextLabel")
+bugTitle.Size = UDim2.new(1, -20, 0, 30)
+bugTitle.Position = UDim2.new(0, 10, 0, 10)
+bugTitle.BackgroundTransparency = 1
+bugTitle.Text = "🛠️ Central de Soluções de Erros"
+bugTitle.TextColor3 = Color3.fromRGB(255, 200, 50)
+bugTitle.Font = Enum.Font.GothamBold
+bugTitle.TextSize = 12
+bugTitle.TextXAlignment = Enum.TextXAlignment.Left
+bugTitle.Parent = bugContainer
+
+local rebootScriptBtn = Instance.new("TextButton")
+rebootScriptBtn.Size = UDim2.new(0.8, 0, 0, 40)
+rebootScriptBtn.Position = UDim2.new(0.1, 0, 0, 50)
+rebootScriptBtn.BackgroundColor3 = Color3.fromRGB(150, 60, 0)
+rebootScriptBtn.Text = "🔄 REINICIAR TOTALMENTE O SCRIPT"
+rebootScriptBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+rebootScriptBtn.Font = Enum.Font.GothamBold
+rebootScriptBtn.TextSize = 11
+rebootScriptBtn.Parent = bugContainer
+Instance.new("UICorner", rebootScriptBtn).CornerRadius = UDim.new(0, 8)
+addHoverEffect(rebootScriptBtn, Color3.fromRGB(150, 60, 0), Color3.fromRGB(190, 80, 0))
+
+-- ========== TECLAS DE ATALHO ==========
+local inputConnection
+inputConnection = uis.InputBegan:Connect(function(input, gpe)
+    if isTyping() then return end
+    if input.KeyCode == Enum.KeyCode.G then
+        if state.isRecording then stopRecording() else startRecording() end
+    elseif input.KeyCode == Enum.KeyCode.R then
+        if state.isPlaying then interruptPlayback()
+        elseif not state.isRecording then startPlayback() end
+    elseif input.KeyCode == Enum.KeyCode.N then
+        toggleMinimize()
+    elseif input.KeyCode == Enum.KeyCode.LeftControl or input.KeyCode == Enum.KeyCode.RightControl then
+        fakeWallclip()
+    elseif input.KeyCode == Enum.KeyCode.Space then
+        fakeWallhop()
+    end
+end)
+
+rebootScriptBtn.MouseButton1Click:Connect(function()
+    if state.recordingConnection then
+        for _, conn in ipairs(state.recordingConnection) do
+            if conn then pcall(function() conn:Disconnect() end) end
+        end
+    end
+    if state.playbackConnection then state.playbackConnection:Disconnect() end
+    if inputConnection then inputConnection:Disconnect() end
+    sg:Destroy()
+    showNotif("🔄 Reiniciando...", true, 1.5)
+end)
+
+closeBtn.MouseButton1Click:Connect(toggleMinimize)
+
+-- ========== INICIALIZAÇÃO ==========
+updateWcBtnState()
+updateWhBtnState()
+refreshSavedList()
+loadLibraryFromGitHub()
+showNotif("✅ FE2 TAS v15.5 Iniciado com Sucesso!", true, 3)
+print("[FE2 TAS v15.5] Inicializado sem erros de HUD!")
