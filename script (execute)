@@ -1,10 +1,14 @@
 --[[
-    FE2 TAS Recorder v15.5 - GITHUB LIBRARY + EXPORTAÇÃO (CORREÇÃO DE MATRIZ DE ROTAÇÃO)
-    Base: v15.4
-    Novidades e Correções:
-    - 🛠️ CORREÇÃO DE CRASH/GUI: Corrigido o erro de hierarquia onde main.Parent apontava para si mesmo.
-    - 🛠️ MATRIZ DE ROTAÇÃO CORRIGIDA: Alterado serializeCFrame para usar cf:GetComponents(), eliminando distorções de ângulo ao exportar.
-    - 🛠️ FIX HUMANOIDSTATE SPAM: Corrigida a leitura de estados vindo do GitHub para evitar travamentos de animação.
+    FE2 TAS Recorder v15.6 - KEYFRAMES POR ARQUIVO NO GITHUB
+    Base: v15.5 (DeepSeek - Correção de matriz de rotação)
+    Alterações (DeepSeek):
+    - LIBRARY_URL substituída por KEYFRAMES_BASE_URL + API_URL
+    - loadLibraryFromGitHub/extractMapNamesFromCode removidas
+    - Nova função loadMapListFromGitHub: usa API do GitHub para listar /keyframes/*.lua
+    - Botão Refresh conectado a loadMapListFromGitHub
+    - Botão Carregar: faz HttpGet do arquivo individual e executa com loadstring
+    - exportCurrentTAS: agora gera "return { ... }" pronto para colar como arquivo .lua
+    - Inicialização chama loadMapListFromGitHub
 ]]
 
 local player = game.Players.LocalPlayer
@@ -18,8 +22,10 @@ local ts = game:GetService("TweenService")
 local DEFAULT_WALK_SPEED = 20
 local DEFAULT_JUMP_POWER = 50
 
--- URL raw do library.lua no GitHub (altere para o seu)
-local LIBRARY_URL = "https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/library.lua"
+-- URL base para arquivos raw (keyframes individuais)
+local KEYFRAMES_BASE_URL = "https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/keyframes/"
+-- URL da API para listar os arquivos da pasta keyframes
+local API_URL = "https://api.github.com/repos/Habuui/FE2-TAS-Autoplay-script/contents/keyframes"
 
 -- Mapeamento das teclas
 local KEYS = {
@@ -123,7 +129,7 @@ main.Active             = true
 main.Draggable          = true
 main.Visible            = true
 main.ClipsDescendants   = true
-main.Parent             = sg -- CORRIGIDO AQUI: Agora anexa corretamente à ScreenGui
+main.Parent             = sg
 
 local mainCorner = Instance.new("UICorner")
 mainCorner.CornerRadius = UDim.new(0, 10)
@@ -145,7 +151,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size             = UDim2.new(1, -50, 1, 0)
 titleText.Position         = UDim2.new(0, 12, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text             = "🎬 FE2 TAS HUD v15.5 (Corrigido)"
+titleText.Text             = "🎬 FE2 TAS HUD v15.6 (Keyframes por Arquivo)"
 titleText.TextColor3       = Color3.fromRGB(255, 255, 255)
 titleText.TextXAlignment   = Enum.TextXAlignment.Left
 titleText.Font             = Enum.Font.GothamBold
@@ -522,7 +528,7 @@ local function startPlayback()
                     ch.Velocity             = ev.velocity
                     ch.AssemblyLinearVelocity = ev.velocity
                 end
-                
+
                 if ev.humanoidState then
                     local currentEnum = hum:GetState()
                     local isDifferent = false
@@ -662,7 +668,11 @@ local function fakeWallhop()
     end
 end
 
--- ========== EXPORTAÇÃO CORRIGIDA ==========
+-- ============================================================
+-- ========== EXPORTAÇÃO — gera "return { ... }" ==========
+-- Alteração DeepSeek: arquivo .lua standalone para a pasta /keyframes
+-- Copie o resultado e cole em NomeDoMapa.lua no repositório
+-- ============================================================
 local function serializeVector3(v)
     return string.format("Vector3.new(%f, %f, %f)", v.X, v.Y, v.Z)
 end
@@ -677,78 +687,102 @@ local function exportCurrentTAS(mapName)
         return
     end
     if not mapName or mapName == "" then mapName = "mapa_desconhecido" end
+
+    -- Gera "return { ... }" — arquivo standalone para /keyframes/NomeDoMapa.lua
     local lines = {}
-    table.insert(lines, "    if mapName == \"" .. mapName .. "\" then")
-    table.insert(lines, "        tasData = {")
+    table.insert(lines, "return {")
     for _, ev in ipairs(state.currentTAS) do
         if ev.type == "keyframe" then
-            local cfStr = serializeCFrame(ev.cframe)
-            local velStr = serializeVector3(ev.velocity)
+            local cfStr    = serializeCFrame(ev.cframe)
+            local velStr   = serializeVector3(ev.velocity)
             local slideStr = tostring(ev.slideActive or false)
             local flickStr = tostring(ev.wallhopFlick or false)
-            local hStateStr = ev.humanoidState and tostring(ev.humanoidState.Value) or "Enum.HumanoidStateType.Running.Value"
-            local kfLine = string.format('            {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%s},', ev.time, cfStr, velStr, slideStr, flickStr, hStateStr)
+            local hStateStr
+            if ev.humanoidState then
+                if type(ev.humanoidState) == "number" then
+                    hStateStr = tostring(ev.humanoidState)
+                else
+                    hStateStr = tostring(ev.humanoidState.Value)
+                end
+            else
+                hStateStr = "8"
+            end
+            local kfLine = string.format(
+                '    {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%s},',
+                ev.time, cfStr, velStr, slideStr, flickStr, hStateStr
+            )
             table.insert(lines, kfLine)
         elseif ev.type == "input" then
-            local inputLine = string.format('            {type="input",time=%f,key="%s",state=%s},', ev.time, ev.key, tostring(ev.state))
+            local inputLine = string.format(
+                '    {type="input",time=%f,key="%s",state=%s},',
+                ev.time, ev.key, tostring(ev.state)
+            )
             table.insert(lines, inputLine)
         end
     end
-    table.insert(lines, "        }")
-    table.insert(lines, "    end")
+    table.insert(lines, "}")
     local output = table.concat(lines, "\n")
+
     local copied = false
     if setclipboard then
         pcall(function() setclipboard(output); copied = true end)
     elseif toclipboard then
         pcall(function() toclipboard(output); copied = true end)
     end
+
     if copied then
-        showNotif("📤 Bloco do mapa copiado! Pronto para colar no library.lua", true, 3)
+        showNotif("📤 Copiado! Cole em /keyframes/" .. mapName .. ".lua", true, 4)
     else
-        print("\n=== COPIE O TEXTO ABAIXO PARA O SEU LIBRARY.LUA ===\n")
+        print("\n=== COLE ISSO EM /keyframes/" .. mapName .. ".lua ===\n")
         print(output)
-        print("\n==================================================\n")
-        showNotif("⚠️ setclipboard não suportado! Bloco impresso no F9.", false, 4)
+        print("\n=====================================================\n")
+        showNotif("⚠️ setclipboard não suportado! Texto impresso no F9.", false, 4)
     end
 end
 
--- ========== CARREGAR LIBRARY.LUA DO GITHUB ==========
-local loadedLibrary = nil
+-- ============================================================
+-- ========== GITHUB — LISTA DE ARQUIVOS VIA API ==========
+-- Alteração DeepSeek: substitui loadLibraryFromGitHub/extractMapNamesFromCode
+-- ============================================================
 local availableMaps = {}
-local refreshGitList
+local refreshGitList  -- forward declaration
 
-local function extractMapNamesFromCode(code)
-    local maps = {}
-    for name in code:gmatch('mapName%s*==%s*"([^"]+)"') do
-        table.insert(maps, name)
-    end
-    return maps
-end
-
-local function loadLibraryFromGitHub()
-    showNotif("⏳ Baixando library.lua do GitHub...", true, 2)
+local function loadMapListFromGitHub()
+    showNotif("⏳ Buscando lista de mapas no GitHub...", true, 2)
     task.spawn(function()
-        local ok, code = pcall(function() return game:HttpGet(LIBRARY_URL, true) end)
-        if not ok or not code or code == "" then
-            showNotif("❌ Falha ao acessar o GitHub. Verifique a URL.", false, 3)
+        local success, response = pcall(function()
+            return game:HttpGet(API_URL, true)
+        end)
+        if not success or not response or response == "" then
+            showNotif("❌ Falha ao acessar a API do GitHub.", false, 3)
             return
         end
-        availableMaps = extractMapNamesFromCode(code)
-        local execOk, lib = pcall(function() return loadstring(code)() end)
-        if execOk and type(lib) == "table" then
-            loadedLibrary = lib
-            showNotif("✅ Library carregada! " .. #availableMaps .. " mapa(s) disponível(is).", true, 2.5)
-        else
-            loadedLibrary = nil
-            showNotif("⚠️ " .. #availableMaps .. " mapa(s) encontrado(s) (somente leitura).", true, 2.5)
+
+        local ok, data = pcall(function() return hs:JSONDecode(response) end)
+        if not ok or type(data) ~= "table" then
+            showNotif("❌ Erro ao processar a lista de arquivos.", false, 3)
+            return
         end
+
+        local newMapList = {}
+        for _, item in ipairs(data) do
+            if item.type == "file" and item.name:sub(-4) == ".lua" then
+                local mapName = item.name:sub(1, -5) -- remove extensão .lua
+                table.insert(newMapList, mapName)
+            end
+        end
+        table.sort(newMapList)
+        availableMaps = newMapList
+        showNotif("✅ " .. #availableMaps .. " mapa(s) encontrado(s) na pasta keyframes.", true, 2.5)
         refreshGitList()
     end)
 end
 
+-- ============================================================
 -- ========== UI - ABA GRAVAR (tab 1) ==========
+-- ============================================================
 local grabContainer = tabContents[1]
+
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 35)
 statusLabel.Position = UDim2.new(0, 10, 0, 10)
@@ -827,7 +861,7 @@ local expBtn = Instance.new("TextButton")
 expBtn.Size = UDim2.new(0.8, 0, 0, 38)
 expBtn.Position = UDim2.new(0.1, 0, 0, 310)
 expBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 180)
-expBtn.Text = "📤 EXPORTAR TAS (Pronto p/ Library)"
+expBtn.Text = "📤 EXPORTAR TAS (Arquivo p/ /keyframes/)"
 expBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 expBtn.Font = Enum.Font.GothamBold
 expBtn.TextSize = 12
@@ -869,8 +903,11 @@ playBtn.MouseButton1Click:Connect(startPlayback)
 expBtn.MouseButton1Click:Connect(function() exportCurrentTAS(mapInput.Text) end)
 clearBtn.MouseButton1Click:Connect(forceReset)
 
+-- ============================================================
 -- ========== UI - ABA SAVES LOCAIS (tab 2) ==========
+-- ============================================================
 local savesContainer = tabContents[2]
+
 local saveNameInput = Instance.new("TextBox")
 saveNameInput.Size = UDim2.new(0.5, -15, 0, 35)
 saveNameInput.Position = UDim2.new(0, 10, 0, 10)
@@ -968,7 +1005,9 @@ saveBtn.MouseButton1Click:Connect(function()
     if saveTAS(saveNameInput.Text) then saveNameInput.Text = "" end
 end)
 
+-- ============================================================
 -- ========== UI - ABA PLAYER CONFIG (tab 3) ==========
+-- ============================================================
 local plyContainer = tabContents[3]
 
 local wcToggle = Instance.new("TextButton")
@@ -1007,19 +1046,23 @@ whToggle.MouseButton1Click:Connect(function()
     updateWhBtnState()
 end)
 
--- ========== UI - ABA GITHUB LIBRARY (tab 4) ==========
+-- ============================================================
+-- ========== UI - ABA TAS FILES / GITHUB (tab 4) ==========
+-- ============================================================
 local gitContainer = tabContents[4]
 
+-- Botão Refresh — conectado a loadMapListFromGitHub (alteração DeepSeek)
 local gitRefreshBtn = Instance.new("TextButton")
 gitRefreshBtn.Size = UDim2.new(0.8, 0, 0, 35)
 gitRefreshBtn.Position = UDim2.new(0.1, 0, 0, 10)
 gitRefreshBtn.BackgroundColor3 = Color3.fromRGB(90, 30, 140)
-gitRefreshBtn.Text = "🔄 REFRESH GITHUB LIBRARY"
+gitRefreshBtn.Text = "🔄 CARREGAR / ATUALIZAR LISTA DE MAPAS"
 gitRefreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 gitRefreshBtn.Font = Enum.Font.GothamBold
 gitRefreshBtn.TextSize = 11
 gitRefreshBtn.Parent = gitContainer
 Instance.new("UICorner", gitRefreshBtn).CornerRadius = UDim.new(0, 6)
+addHoverEffect(gitRefreshBtn, Color3.fromRGB(90, 30, 140), Color3.fromRGB(120, 50, 180))
 
 local gitScroll = Instance.new("ScrollingFrame")
 gitScroll.Size = UDim2.new(1, -20, 1, -60)
@@ -1033,15 +1076,18 @@ local gitLayout = Instance.new("UIListLayout")
 gitLayout.Padding = UDim.new(0, 5)
 gitLayout.Parent = gitScroll
 
+-- refreshGitList — agora usa availableMaps preenchido pela API
+-- Botão Carregar faz HttpGet do arquivo individual (alteração DeepSeek)
 function refreshGitList()
     for _, c in ipairs(gitScroll:GetChildren()) do
         if c:IsA("Frame") then c:Destroy() end
     end
+
     if #availableMaps == 0 then
         local empty = Instance.new("TextLabel")
         empty.Size = UDim2.new(1, 0, 0, 40)
         empty.BackgroundTransparency = 1
-        empty.Text = "Nenhum mapa localizado na library.lua."
+        empty.Text = "Nenhum arquivo .lua encontrado na pasta keyframes."
         empty.TextColor3 = Color3.fromRGB(130, 130, 150)
         empty.Font = Enum.Font.Gotham
         empty.TextSize = 11
@@ -1050,7 +1096,7 @@ function refreshGitList()
         return
     end
 
-    for i, mapName in ipairs(availableMaps) do
+    for _, mapName in ipairs(availableMaps) do
         local item = Instance.new("Frame")
         item.Size = UDim2.new(1, 0, 0, 40)
         item.BackgroundColor3 = Color3.fromRGB(20, 26, 35)
@@ -1079,43 +1125,44 @@ function refreshGitList()
         loadB.TextSize = 9
         loadB.Parent = item
         Instance.new("UICorner", loadB).CornerRadius = UDim.new(0, 4)
+        addHoverEffect(loadB, Color3.fromRGB(0, 120, 150), Color3.fromRGB(0, 160, 200))
 
+        -- Alteração DeepSeek: baixa o arquivo individual via HttpGet e executa com loadstring
+        local capMap = mapName
         loadB.MouseButton1Click:Connect(function()
-            if loadedLibrary and loadedLibrary.getTAS then
-                local data = loadedLibrary.getTAS(mapName)
-                if data and #data > 0 then
-                    state.currentTAS = data
-                    state.currentMapName = mapName
-                    showNotif("📥 Carregado do Git: " .. mapName, true)
-                else
-                    showNotif("❌ Tabela vazia ou método inválido!", false)
+            local url = KEYFRAMES_BASE_URL .. capMap .. ".lua"
+            showNotif("⏳ Baixando " .. capMap .. "...", true, 1.5)
+            task.spawn(function()
+                local ok, code = pcall(function() return game:HttpGet(url, true) end)
+                if not ok or not code then
+                    showNotif("❌ Falha ao baixar o mapa: " .. capMap, false, 2)
+                    return
                 end
-            else
-                showNotif("⏳ Buscando código puro do GitHub...", true, 1.5)
-                task.spawn(function()
-                    local ok, code = pcall(function() return game:HttpGet(LIBRARY_URL, true) end)
-                    if ok and code then
-                        local tasData = nil
-                        local funcStr = code .. "\nreturn TAS_LIBRARY.getTAS('" .. mapName .. "')"
-                        local execOk, res = pcall(function() return loadstring(funcStr)() end)
-                        if execOk and res and type(res) == "table" then
-                            state.currentTAS = res
-                            state.currentMapName = mapName
-                            showNotif("✅ Mapa carregado via fallback!", true)
-                        else
-                            showNotif("❌ Erro ao decodificar a tabela.", false)
-                        end
-                    end
-                end)
-            end
+                local func, err = loadstring(code)
+                if not func then
+                    showNotif("❌ Erro no arquivo: " .. tostring(err), false, 2)
+                    return
+                end
+                local tasData = func()
+                if type(tasData) == "table" and #tasData > 0 then
+                    state.currentTAS     = tasData
+                    state.currentMapName = capMap
+                    showNotif("📥 Carregado do GitHub: " .. capMap, true)
+                else
+                    showNotif("❌ Dados inválidos no arquivo.", false, 2)
+                end
+            end)
         end)
     end
     gitScroll.CanvasSize = UDim2.new(0, 0, 0, #availableMaps * 45)
 end
 
-gitRefreshBtn.MouseButton1Click:Connect(loadLibraryFromGitHub)
+-- Alteração DeepSeek: Refresh conectado a loadMapListFromGitHub
+gitRefreshBtn.MouseButton1Click:Connect(loadMapListFromGitHub)
 
--- ========== UI - ABA BUG RESOLVER (tab 5) ==========
+-- ============================================================
+-- ========== UI - ABA BUGS (tab 5) ==========
+-- ============================================================
 local bugContainer = tabContents[5]
 
 local bugTitle = Instance.new("TextLabel")
@@ -1177,6 +1224,7 @@ closeBtn.MouseButton1Click:Connect(toggleMinimize)
 updateWcBtnState()
 updateWhBtnState()
 refreshSavedList()
-loadLibraryFromGitHub()
-showNotif("✅ FE2 TAS v15.5 Iniciado com Sucesso!", true, 3)
-print("[FE2 TAS v15.5] Inicializado sem erros de HUD!")
+-- Alteração DeepSeek: chama loadMapListFromGitHub ao invés de loadLibraryFromGitHub
+loadMapListFromGitHub()
+showNotif("✅ FE2 TAS v15.6 Iniciado!", true, 3)
+print("[FE2 TAS v15.6] Inicializado — modo keyframes por arquivo!")
