@@ -1,14 +1,19 @@
 --[[
-    FE2 TAS Recorder v15.6 - KEYFRAMES POR ARQUIVO NO GITHUB
-    Base: v15.5 (DeepSeek - Correção de matriz de rotação)
-    Alterações (DeepSeek):
-    - LIBRARY_URL substituída por KEYFRAMES_BASE_URL + API_URL
-    - loadLibraryFromGitHub/extractMapNamesFromCode removidas
-    - Nova função loadMapListFromGitHub: usa API do GitHub para listar /keyframes/*.lua
-    - Botão Refresh conectado a loadMapListFromGitHub
-    - Botão Carregar: faz HttpGet do arquivo individual e executa com loadstring
-    - exportCurrentTAS: agora gera "return { ... }" pronto para colar como arquivo .lua
-    - Inicialização chama loadMapListFromGitHub
+    FE2 TAS Recorder v15.9 FIXED 7 - SISTEMA DE DOWNLOAD OTIMIZADO
+    Base: v15.9 FIXED 6 (Create TAS, Wallhop/Wallclip originais)
+    Alterações (Gemini / instruções):
+    1. SEM AUTO-LOAD: loadMapListFromGitHub NÃO é mais chamada no startup.
+       O script inicia limpo. O usuário clica no botão da aba TAS Files
+       quando quiser baixar os mapas.
+    2. BARRA DE PROGRESSO VISUAL: durante o download, uma ScreenGui temporária
+       exibe nome do arquivo atual, barra preenchendo conforme progresso,
+       e contador "X/Y (Z%)".
+    3. DOWNLOAD SEQUENCIAL (sem task.spawn por arquivo): elimina o erro 1/14
+       (rate-limit do Roblox). Cada arquivo é baixado um de cada vez com
+       task.wait(0.05) entre eles. refreshSavedList() ao final.
+    4. DETECTOR V17.0 LIMPO: ao detectar mapa, busca SOMENTE em
+       getgenv().FE2_TAS_SAVES. Se não encontrar, notifica para o usuário
+       atualizar a lista. Zero HttpGet no loop de detecção.
 ]]
 
 local player = game.Players.LocalPlayer
@@ -22,12 +27,9 @@ local ts = game:GetService("TweenService")
 local DEFAULT_WALK_SPEED = 20
 local DEFAULT_JUMP_POWER = 50
 
--- URL base para arquivos raw (keyframes individuais)
 local KEYFRAMES_BASE_URL = "https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/keyframes/"
--- URL da API para listar os arquivos da pasta keyframes
 local API_URL = "https://api.github.com/repos/Habuui/FE2-TAS-Autoplay-script/contents/keyframes"
 
--- Mapeamento das teclas
 local KEYS = {
     W = Enum.KeyCode.W,
     A = Enum.KeyCode.A,
@@ -43,27 +45,29 @@ if not getgenv().FE2_TAS_SAVES then
 end
 local savedTAS = getgenv().FE2_TAS_SAVES
 
--- Destrói interface antiga
 local oldGui = player:WaitForChild("PlayerGui"):FindFirstChild("FE2_TAS_Recorder") or game.CoreGui:FindFirstChild("FE2_TAS_Recorder")
 if oldGui then oldGui:Destroy() end
 
 -- ========== ESTADO ==========
+-- Gemini: adicionadas as duas propriedades de automação
 local state = {
-    isRecording         = false,
-    currentTAS          = {},
-    currentMapName      = "",
-    isPlaying           = false,
-    playbackConnection  = nil,
-    recordingConnection = nil,
-    playbackStartTime   = 0,
-    wallclipEnabled     = true,
-    wallhopEnabled      = true,
-    lastPlaybackCall    = 0,
-    isMinimized         = false,
-    originalWalkSpeed   = DEFAULT_WALK_SPEED,
-    originalJumpPower   = DEFAULT_JUMP_POWER,
-    originalRootC0      = nil,
-    lastInputStates     = {W=false, A=false, S=false, D=false, Space=false, E=false},
+    isRecording           = false,
+    currentTAS            = {},
+    currentMapName        = "",
+    isPlaying             = false,
+    playbackConnection    = nil,
+    recordingConnection   = nil,
+    playbackStartTime     = 0,
+    wallclipEnabled       = true,
+    wallhopEnabled        = true,
+    lastPlaybackCall      = 0,
+    isMinimized           = false,
+    originalWalkSpeed     = DEFAULT_WALK_SPEED,
+    originalJumpPower     = DEFAULT_JUMP_POWER,
+    originalRootC0        = nil,
+    lastInputStates       = {W=false, A=false, S=false, D=false, Space=false, E=false},
+    autoPlayEnabled       = false,   -- Gemini: toggle de auto play
+    ultimoMapaDetectado   = "",      -- Gemini: evita recarregar o mesmo mapa
 }
 
 -- ========== AUXILIARES VISUAIS ==========
@@ -136,7 +140,6 @@ mainCorner.CornerRadius = UDim.new(0, 10)
 mainCorner.Parent       = main
 applyShineStroke(main, Color3.fromRGB(0, 140, 255), Color3.fromRGB(255, 255, 255))
 
--- Barra de título
 local titleBar = Instance.new("Frame")
 titleBar.Size             = UDim2.new(1, 0, 0, 38)
 titleBar.BackgroundColor3 = Color3.fromRGB(24, 25, 35)
@@ -151,7 +154,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size             = UDim2.new(1, -50, 1, 0)
 titleText.Position         = UDim2.new(0, 12, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text             = "🎬 FE2 TAS HUD v15.6 (Keyframes por Arquivo)"
+titleText.Text             = "🎬 FE2 TAS HUD v15.9 (Auto Play)"
 titleText.TextColor3       = Color3.fromRGB(255, 255, 255)
 titleText.TextXAlignment   = Enum.TextXAlignment.Left
 titleText.Font             = Enum.Font.GothamBold
@@ -610,7 +613,10 @@ local function forceReset()
     showNotif("🔄 Estado limpo!", true, 1.5)
 end
 
--- ========== WALLCLIP ==========
+-- ========== WALLCLIP (original v15.5) ==========
+-- Raycast à frente do personagem: se houver parede a menos de 2.2u,
+-- teletransporta 5u para a frente atravessando-a.
+-- NÃO é noclip — é um teleporte pontual para ultrapassar a parede.
 local function fakeWallclip()
     if not state.wallclipEnabled then return end
     local char = player.Character
@@ -629,7 +635,10 @@ local function fakeWallclip()
     end
 end
 
--- ========== WALLHOP MANUAL ==========
+-- ========== WALLHOP MANUAL (original v15.5) ==========
+-- Raycast à frente: se houver parede a menos de 1.8u, força pulo (velocity Y=40)
+-- e aplica um flick visual no RootJoint. Se estiver gravando, marca wallhopFlick=true
+-- no último keyframe para ser reproduzido pelo motor de playback.
 local function fakeWallhop()
     if not state.wallhopEnabled then return end
     local char = player.Character
@@ -647,6 +656,8 @@ local function fakeWallhop()
         humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
         task.wait(0.05)
         hrp.Velocity = Vector3.new(hrp.Velocity.X, 40, hrp.Velocity.Z)
+
+        -- Marca wallhopFlick no último keyframe da gravação atual
         if state.isRecording and #state.currentTAS > 0 then
             for i = #state.currentTAS, 1, -1 do
                 if state.currentTAS[i].type == "keyframe" then
@@ -655,6 +666,8 @@ local function fakeWallhop()
                 end
             end
         end
+
+        -- Flick visual do RootJoint (igual ao v15.5)
         task.spawn(function()
             local rj = char:FindFirstChild("RootJoint", true)
             if rj then
@@ -668,11 +681,7 @@ local function fakeWallhop()
     end
 end
 
--- ============================================================
--- ========== EXPORTAÇÃO — gera "return { ... }" ==========
--- Alteração DeepSeek: arquivo .lua standalone para a pasta /keyframes
--- Copie o resultado e cole em NomeDoMapa.lua no repositório
--- ============================================================
+-- ========== EXPORTAÇÃO ==========
 local function serializeVector3(v)
     return string.format("Vector3.new(%f, %f, %f)", v.X, v.Y, v.Z)
 end
@@ -688,7 +697,6 @@ local function exportCurrentTAS(mapName)
     end
     if not mapName or mapName == "" then mapName = "mapa_desconhecido" end
 
-    -- Gera "return { ... }" — arquivo standalone para /keyframes/NomeDoMapa.lua
     local lines = {}
     table.insert(lines, "return {")
     for _, ev in ipairs(state.currentTAS) do
@@ -740,52 +748,352 @@ local function exportCurrentTAS(mapName)
     end
 end
 
--- ============================================================
--- ========== GITHUB — LISTA DE ARQUIVOS VIA API ==========
--- Alteração DeepSeek: substitui loadLibraryFromGitHub/extractMapNamesFromCode
--- ============================================================
+-- ========== GITHUB — DOWNLOAD SOB DEMANDA (ALTERAÇÕES 2 e 3) ==========
+-- Chamada apenas pelo botão do usuário (não no startup).
+-- Download sequencial com task.wait(0.05) entre arquivos → sem erro 1/14.
+-- Barra de progresso visual temporária durante o download.
 local availableMaps = {}
-local refreshGitList  -- forward declaration
+local refreshGitList
 
 local function loadMapListFromGitHub()
-    showNotif("⏳ Buscando lista de mapas no GitHub...", true, 2)
+    showNotif("⏳ Conectando ao GitHub...", true, 2)
     task.spawn(function()
+
+        -- ── Passo 1: Busca a lista de arquivos via API ──────────────────
         local success, response = pcall(function()
             return game:HttpGet(API_URL, true)
         end)
         if not success or not response or response == "" then
-            showNotif("❌ Falha ao acessar a API do GitHub.", false, 3)
+            showNotif("❌ Falha ao acessar API do GitHub.", false, 3)
             return
         end
 
         local ok, data = pcall(function() return hs:JSONDecode(response) end)
         if not ok or type(data) ~= "table" then
-            showNotif("❌ Erro ao processar a lista de arquivos.", false, 3)
+            showNotif("❌ Erro ao processar lista de arquivos.", false, 3)
             return
         end
 
-        local newMapList = {}
+        local arquivos = {}
         for _, item in ipairs(data) do
             if item.type == "file" and item.name:sub(-4) == ".lua" then
-                local mapName = item.name:sub(1, -5) -- remove extensão .lua
-                table.insert(newMapList, mapName)
+                table.insert(arquivos, item.name:sub(1, -5))
             end
         end
-        table.sort(newMapList)
-        availableMaps = newMapList
-        showNotif("✅ " .. #availableMaps .. " mapa(s) encontrado(s) na pasta keyframes.", true, 2.5)
+        table.sort(arquivos)
+        availableMaps = arquivos
+
+        if #arquivos == 0 then
+            showNotif("⚠️ Nenhum .lua em /keyframes.", false, 3)
+            refreshGitList()
+            return
+        end
+
+        -- ── Passo 2: Cria a ScreenGui de progresso ─────────────────────
+        local progressGui = Instance.new("ScreenGui")
+        progressGui.Name         = "FE2_TAS_Progress"
+        progressGui.ResetOnSpawn = false
+        progressGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+        pcall(function() progressGui.Parent = game.CoreGui end)
+        if not progressGui.Parent then
+            progressGui.Parent = player:WaitForChild("PlayerGui")
+        end
+
+        -- Fundo principal
+        local progFrame = Instance.new("Frame")
+        progFrame.Size             = UDim2.new(0, 360, 0, 90)
+        progFrame.Position         = UDim2.new(0.5, -180, 1, -130)
+        progFrame.BackgroundColor3 = Color3.fromRGB(12, 14, 22)
+        progFrame.BackgroundTransparency = 0.1
+        progFrame.BorderSizePixel  = 0
+        progFrame.Parent           = progressGui
+        Instance.new("UICorner", progFrame).CornerRadius = UDim.new(0, 10)
+        addStroke(progFrame, Color3.fromRGB(0, 160, 255), 1.5)
+
+        -- Texto do arquivo atual
+        local progLabel = Instance.new("TextLabel")
+        progLabel.Size             = UDim2.new(1, -16, 0, 28)
+        progLabel.Position         = UDim2.new(0, 8, 0, 6)
+        progLabel.BackgroundTransparency = 1
+        progLabel.Text             = "📥 Preparando..."
+        progLabel.TextColor3       = Color3.fromRGB(180, 220, 255)
+        progLabel.Font             = Enum.Font.GothamBold
+        progLabel.TextSize         = 11
+        progLabel.TextXAlignment   = Enum.TextXAlignment.Left
+        progLabel.TextWrapped      = true
+        progLabel.Parent           = progFrame
+
+        -- Fundo da barra
+        local barBg = Instance.new("Frame")
+        barBg.Size             = UDim2.new(1, -16, 0, 18)
+        barBg.Position         = UDim2.new(0, 8, 0, 38)
+        barBg.BackgroundColor3 = Color3.fromRGB(30, 32, 45)
+        barBg.BorderSizePixel  = 0
+        barBg.Parent           = progFrame
+        Instance.new("UICorner", barBg).CornerRadius = UDim.new(0, 6)
+
+        -- Barra de preenchimento
+        local barFill = Instance.new("Frame")
+        barFill.Size             = UDim2.new(0, 0, 1, 0)
+        barFill.Position         = UDim2.new(0, 0, 0, 0)
+        barFill.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
+        barFill.BorderSizePixel  = 0
+        barFill.Parent           = barBg
+        Instance.new("UICorner", barFill).CornerRadius = UDim.new(0, 6)
+
+        -- Texto de porcentagem sobre a barra
+        local barText = Instance.new("TextLabel")
+        barText.Size             = UDim2.new(1, 0, 1, 0)
+        barText.BackgroundTransparency = 1
+        barText.Text             = "0/" .. #arquivos .. " (0%)"
+        barText.TextColor3       = Color3.fromRGB(255, 255, 255)
+        barText.Font             = Enum.Font.GothamBold
+        barText.TextSize         = 10
+        barText.ZIndex           = 2
+        barText.Parent           = barBg
+
+        -- Texto de status embaixo
+        local statusProgLabel = Instance.new("TextLabel")
+        statusProgLabel.Size   = UDim2.new(1, -16, 0, 20)
+        statusProgLabel.Position = UDim2.new(0, 8, 0, 62)
+        statusProgLabel.BackgroundTransparency = 1
+        statusProgLabel.Text   = "Aguarde — não feche o script"
+        statusProgLabel.TextColor3 = Color3.fromRGB(120, 130, 160)
+        statusProgLabel.Font   = Enum.Font.Gotham
+        statusProgLabel.TextSize = 9
+        statusProgLabel.TextXAlignment = Enum.TextXAlignment.Left
+        statusProgLabel.Parent = progFrame
+
+        -- ── Passo 3: Download SEQUENCIAL (sem task.spawn por arquivo) ───
+        -- Evita o erro 1/14 (rate-limit). Um arquivo de cada vez.
+        local ok_count  = 0
+        local err_count = 0
+        local total     = #arquivos
+
+        for idx, nomeMapa in ipairs(arquivos) do
+            -- Atualiza barra de progresso
+            local progRatio = (idx - 1) / total
+            local pct = math.floor(progRatio * 100)
+            progLabel.Text = "📥 Baixando: " .. nomeMapa .. ".lua"
+            barFill.Size   = UDim2.new(progRatio, 0, 1, 0)
+            barText.Text   = (idx - 1) .. "/" .. total .. " (" .. pct .. "%)"
+
+            local url = KEYFRAMES_BASE_URL .. nomeMapa .. ".lua"
+            local okD, codigo = pcall(function() return game:HttpGet(url, true) end)
+
+            if okD and codigo and codigo ~= "" then
+                local func, _ = loadstring(codigo)
+                if func then
+                    local okF, tasData = pcall(func)
+                    if okF and type(tasData) == "table" and #tasData > 0 then
+                        savedTAS[nomeMapa]       = tasData
+                        getgenv().FE2_TAS_SAVES  = savedTAS
+                        ok_count = ok_count + 1
+                    else
+                        err_count = err_count + 1
+                    end
+                else
+                    err_count = err_count + 1
+                end
+            else
+                err_count = err_count + 1
+            end
+
+            -- Delay de segurança entre requisições (evita erro 1/14)
+            task.wait(0.05)
+        end
+
+        -- Barra 100% ao final
+        barFill.Size = UDim2.new(1, 0, 1, 0)
+        barText.Text = total .. "/" .. total .. " (100%)"
+        progLabel.Text = "✅ Concluído!"
+        task.wait(1.2)
+
+        -- Destrói a GUI de progresso
+        pcall(function() progressGui:Destroy() end)
+
+        -- Atualiza as listas na interface
+        refreshSavedList()
         refreshGitList()
+
+        local msg = "✅ " .. ok_count .. "/" .. total .. " mapas baixados e prontos na aba Saves!"
+        if err_count > 0 then msg = msg .. " (" .. err_count .. " erro(s))" end
+        showNotif(msg, ok_count > 0, 5)
+        print("[FE2 TAS v15.9 FIXED 7] Download concluído: " .. ok_count .. " OK, " .. err_count .. " erros.")
     end)
 end
+
+-- ============================================================
+-- ========== DETECTOR V17.0 — MOTOR CORRIGIDO (CORREÇÃO 2) ==
+-- isTrulyVisible: sobe toda a hierarquia checando visibilidade.
+-- obterScreenGuiDoLoadingAtivo: isola a ScreenGui com "Waiting for"
+-- realmente visível — ignora UIs fantasmas/residuais.
+-- Loop a 0.15s. Zero HttpGet — usa dados já na memória (pre-load).
+-- ============================================================
+
+-- Verifica se um GuiObject está REALMENTE visível (checa todos os ancestrais)
+local function isTrulyVisible(object)
+    if not object or not object:IsA("GuiObject") then return false end
+    if not object.Visible then return false end
+    if object:IsA("TextLabel") and (object.TextTransparency >= 1 or object.Text == "") then return false end
+    local current = object.Parent
+    while current do
+        if current:IsA("GuiObject") then
+            if not current.Visible then return false end
+        elseif current:IsA("ScreenGui") then
+            if not current.Enabled then return false end
+            break
+        else
+            break
+        end
+        current = current.Parent
+    end
+    return true
+end
+
+-- Retorna a ScreenGui exata que está mostrando o loading real agora
+local function obterScreenGuiDoLoadingAtivo()
+    local pg = player:FindFirstChild("PlayerGui")
+    if not pg then return nil end
+    for _, v in ipairs(pg:GetDescendants()) do
+        if v:IsA("TextLabel") and v.Text and v.Text:find("Waiting for") then
+            if isTrulyVisible(v) then
+                return v:FindFirstAncestorOfClass("ScreenGui")
+            end
+        end
+    end
+    return nil
+end
+
+-- Extrai o nome do mapa do padrão "#1: Nome [Dificuldade]"
+local function extrairNomeMapa(texto)
+    local nome = texto:match("#%d+:%s*([^%[%]]+)%s*%[")
+    if nome then
+        return nome:match("^%s*(.-)%s*$")
+    end
+    return nil
+end
+
+-- Loop principal do Detector V17.0
+task.spawn(function()
+    while true do
+        task.wait(0.15)
+        if not state.autoPlayEnabled then continue end
+
+        -- 1. Busca a ScreenGui de loading real
+        local guiAtiva = obterScreenGuiDoLoadingAtivo()
+        if not guiAtiva then continue end
+
+        -- 2. Extrai o nome do mapa SOMENTE de dentro da guiAtiva
+        local mapaAtual = nil
+        for _, v in ipairs(guiAtiva:GetDescendants()) do
+            if v:IsA("TextLabel") and v.Text and isTrulyVisible(v) then
+                local nome = extrairNomeMapa(v.Text)
+                if nome and nome ~= "" then
+                    mapaAtual = nome
+                    break
+                end
+            end
+        end
+        if not mapaAtual then continue end
+
+        -- 3. Ignora se já processamos este mapa
+        if mapaAtual == state.ultimoMapaDetectado then continue end
+        state.ultimoMapaDetectado = mapaAtual
+
+        -- 4. Remove espaços: "Lost Woods" → "LostWoods"
+        local mapaFormatado = mapaAtual:gsub("%s+", "")
+
+        -- 5. Busca keyframes na memória LOCAL — 0ms, zero HttpGet
+        local keyframes = savedTAS[mapaFormatado]
+        if not keyframes or #keyframes == 0 then
+            -- Alteração 4: mensagem clara orientando o usuário
+            showNotif("⚠️ Mapa não baixado! Vá na aba TAS Files e atualize a lista.", false, 4)
+            print("[Detector V17] Mapa sem keyframes locais: " .. mapaFormatado)
+            continue
+        end
+
+        state.currentTAS     = keyframes
+        state.currentMapName = mapaFormatado
+
+        -- 6. Notificação imediata com contagem de keyframes
+        showNotif("🎯 Mapa: " .. mapaAtual .. " | KF: " .. #keyframes, true, 4)
+        print("[Detector V17] Detectado: " .. mapaAtual .. " — " .. #keyframes .. " eventos")
+
+        -- 7. Aguarda o loading sumir monitorando a guiAtiva (timeout 90s)
+        local timeout = 0
+        while timeout < 600 do
+            task.wait(0.15)
+            timeout = timeout + 1
+            -- Verifica se a guiAtiva ainda está ativa
+            local ainda_ativa = false
+            pcall(function()
+                ainda_ativa = guiAtiva.Parent ~= nil and guiAtiva.Enabled
+                    and obterScreenGuiDoLoadingAtivo() == guiAtiva
+            end)
+            if not ainda_ativa then break end
+        end
+
+        -- 8. Pausa de segurança para spawn do personagem
+        task.wait(0.6)
+
+        -- 9. Dispara o TAS automaticamente
+        if state.autoPlayEnabled and #state.currentTAS > 0 then
+            showNotif("🤖 Executando TAS: " .. mapaAtual, true, 2)
+            startPlayback()
+        end
+    end
+end)
 
 -- ============================================================
 -- ========== UI - ABA GRAVAR (tab 1) ==========
 -- ============================================================
 local grabContainer = tabContents[1]
 
+-- ===== BOTÃO AUTO PLAY (Gemini) — posicionado no topo da aba =====
+local autoPlayBtn = Instance.new("TextButton")
+autoPlayBtn.Size            = UDim2.new(0.8, 0, 0, 42)
+autoPlayBtn.Position        = UDim2.new(0.1, 0, 0, 8)
+autoPlayBtn.BackgroundColor3= Color3.fromRGB(35, 35, 45)
+autoPlayBtn.Text            = "🤖 Auto Play: DESATIVADO"
+autoPlayBtn.TextColor3      = Color3.fromRGB(200, 200, 220)
+autoPlayBtn.Font            = Enum.Font.GothamBold
+autoPlayBtn.TextSize        = 13
+autoPlayBtn.Parent          = grabContainer
+Instance.new("UICorner", autoPlayBtn).CornerRadius = UDim.new(0, 8)
+applyShineStroke(autoPlayBtn, Color3.fromRGB(60, 60, 80), Color3.fromRGB(180, 180, 255))
+
+local function updateAutoPlayBtn()
+    if state.autoPlayEnabled then
+        autoPlayBtn.BackgroundColor3 = Color3.fromRGB(15, 80, 45)
+        autoPlayBtn.Text             = "🤖 Auto Play: ATIVADO"
+        autoPlayBtn.TextColor3       = Color3.fromRGB(80, 255, 150)
+    else
+        autoPlayBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
+        autoPlayBtn.Text             = "🤖 Auto Play: DESATIVADO"
+        autoPlayBtn.TextColor3       = Color3.fromRGB(200, 200, 220)
+    end
+end
+
+autoPlayBtn.MouseButton1Click:Connect(function()
+    state.autoPlayEnabled = not state.autoPlayEnabled
+    if state.autoPlayEnabled then
+        -- Ao ativar, reseta o último mapa para forçar re-detecção
+        state.ultimoMapaDetectado = ""
+    end
+    updateAutoPlayBtn()
+    showNotif(
+        state.autoPlayEnabled and "🤖 Auto Play ATIVADO! Aguardando mapa..." or "🤖 Auto Play DESATIVADO.",
+        state.autoPlayEnabled,
+        2
+    )
+end)
+-- ===== FIM BOTÃO AUTO PLAY =====
+
+-- Os demais elementos da aba Gravar ficam deslocados +55px para acomodar o botão
 local statusLabel = Instance.new("TextLabel")
-statusLabel.Size = UDim2.new(1, -20, 0, 35)
-statusLabel.Position = UDim2.new(0, 10, 0, 10)
+statusLabel.Size = UDim2.new(1, -20, 0, 30)
+statusLabel.Position = UDim2.new(0, 10, 0, 58)
 statusLabel.BackgroundTransparency = 1
 statusLabel.Text = "⚫ Nenhuma gravação"
 statusLabel.TextColor3 = Color3.fromRGB(180, 180, 220)
@@ -795,8 +1103,8 @@ statusLabel.TextXAlignment = Enum.TextXAlignment.Left
 statusLabel.Parent = grabContainer
 
 local frameLabel = Instance.new("TextLabel")
-frameLabel.Size = UDim2.new(1, -20, 0, 25)
-frameLabel.Position = UDim2.new(0, 10, 0, 50)
+frameLabel.Size = UDim2.new(1, -20, 0, 20)
+frameLabel.Position = UDim2.new(0, 10, 0, 92)
 frameLabel.BackgroundTransparency = 1
 frameLabel.Text = "📹 Eventos na Memória: 0"
 frameLabel.TextColor3 = Color3.fromRGB(140, 140, 160)
@@ -807,7 +1115,7 @@ frameLabel.Parent = grabContainer
 
 local recBtn = Instance.new("TextButton")
 recBtn.Size = UDim2.new(0.8, 0, 0, 40)
-recBtn.Position = UDim2.new(0.1, 0, 0, 90)
+recBtn.Position = UDim2.new(0.1, 0, 0, 120)
 recBtn.BackgroundColor3 = Color3.fromRGB(140, 20, 20)
 recBtn.Text = "🔴 INICIAR GRAVAÇÃO (G)"
 recBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -820,7 +1128,7 @@ applyShineStroke(recBtn, Color3.fromRGB(100, 10, 10), Color3.fromRGB(255, 100, 1
 
 local stopRecBtn = Instance.new("TextButton")
 stopRecBtn.Size = UDim2.new(0.8, 0, 0, 40)
-stopRecBtn.Position = UDim2.new(0.1, 0, 0, 145)
+stopRecBtn.Position = UDim2.new(0.1, 0, 0, 170)
 stopRecBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
 stopRecBtn.Text = "⏹️ PARAR GRAVAÇÃO (G)"
 stopRecBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
@@ -833,7 +1141,7 @@ addStroke(stopRecBtn, Color3.fromRGB(80, 80, 95), 1)
 
 local playBtn = Instance.new("TextButton")
 playBtn.Size = UDim2.new(0.8, 0, 0, 40)
-playBtn.Position = UDim2.new(0.1, 0, 0, 200)
+playBtn.Position = UDim2.new(0.1, 0, 0, 220)
 playBtn.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
 playBtn.Text = "▶️ REPRODUZIR GRAVAÇÃO (R)"
 playBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -846,7 +1154,7 @@ addStroke(playBtn, Color3.fromRGB(10, 80, 40), 1)
 
 local mapInput = Instance.new("TextBox")
 mapInput.Size = UDim2.new(0.8, 0, 0, 35)
-mapInput.Position = UDim2.new(0.1, 0, 0, 265)
+mapInput.Position = UDim2.new(0.1, 0, 0, 275)
 mapInput.BackgroundColor3 = Color3.fromRGB(22, 23, 30)
 mapInput.Text = ""
 mapInput.PlaceholderText = "Nome do mapa para exportar..."
@@ -859,7 +1167,7 @@ addStroke(mapInput, Color3.fromRGB(45, 45, 60), 1)
 
 local expBtn = Instance.new("TextButton")
 expBtn.Size = UDim2.new(0.8, 0, 0, 38)
-expBtn.Position = UDim2.new(0.1, 0, 0, 310)
+expBtn.Position = UDim2.new(0.1, 0, 0, 320)
 expBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 180)
 expBtn.Text = "📤 EXPORTAR TAS (Arquivo p/ /keyframes/)"
 expBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -871,7 +1179,7 @@ addHoverEffect(expBtn, Color3.fromRGB(0, 100, 180), Color3.fromRGB(0, 130, 220))
 
 local clearBtn = Instance.new("TextButton")
 clearBtn.Size = UDim2.new(0.8, 0, 0, 35)
-clearBtn.Position = UDim2.new(0.1, 0, 0, 365)
+clearBtn.Position = UDim2.new(0.1, 0, 0, 368)
 clearBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
 clearBtn.Text = "🗑️ LIMPAR ESTADO"
 clearBtn.TextColor3 = Color3.fromRGB(200, 140, 140)
@@ -889,6 +1197,9 @@ task.spawn(function()
         elseif state.isPlaying then
             statusLabel.Text = "▶️ REPRODUZINDO TAS..."
             statusLabel.TextColor3 = Color3.fromRGB(50, 255, 120)
+        elseif state.autoPlayEnabled then
+            statusLabel.Text = "🤖 Auto Play ativo — aguardando mapa..."
+            statusLabel.TextColor3 = Color3.fromRGB(80, 200, 255)
         else
             statusLabel.Text = "⚫ Parado"
             statusLabel.TextColor3 = Color3.fromRGB(180, 180, 220)
@@ -1051,7 +1362,6 @@ end)
 -- ============================================================
 local gitContainer = tabContents[4]
 
--- Botão Refresh — conectado a loadMapListFromGitHub (alteração DeepSeek)
 local gitRefreshBtn = Instance.new("TextButton")
 gitRefreshBtn.Size = UDim2.new(0.8, 0, 0, 35)
 gitRefreshBtn.Position = UDim2.new(0.1, 0, 0, 10)
@@ -1076,8 +1386,6 @@ local gitLayout = Instance.new("UIListLayout")
 gitLayout.Padding = UDim.new(0, 5)
 gitLayout.Parent = gitScroll
 
--- refreshGitList — agora usa availableMaps preenchido pela API
--- Botão Carregar faz HttpGet do arquivo individual (alteração DeepSeek)
 function refreshGitList()
     for _, c in ipairs(gitScroll:GetChildren()) do
         if c:IsA("Frame") then c:Destroy() end
@@ -1127,9 +1435,17 @@ function refreshGitList()
         Instance.new("UICorner", loadB).CornerRadius = UDim.new(0, 4)
         addHoverEffect(loadB, Color3.fromRGB(0, 120, 150), Color3.fromRGB(0, 160, 200))
 
-        -- Alteração DeepSeek: baixa o arquivo individual via HttpGet e executa com loadstring
         local capMap = mapName
         loadB.MouseButton1Click:Connect(function()
+            -- Verifica primeiro na memória local (pre-load)
+            local localData = savedTAS[capMap]
+            if localData and #localData > 0 then
+                state.currentTAS     = localData
+                state.currentMapName = capMap
+                showNotif("📂 Carregado da memória: " .. capMap, true)
+                return
+            end
+            -- Fallback: baixa do GitHub se não estiver em cache
             local url = KEYFRAMES_BASE_URL .. capMap .. ".lua"
             showNotif("⏳ Baixando " .. capMap .. "...", true, 1.5)
             task.spawn(function()
@@ -1145,8 +1461,11 @@ function refreshGitList()
                 end
                 local tasData = func()
                 if type(tasData) == "table" and #tasData > 0 then
+                    savedTAS[capMap]        = tasData
+                    getgenv().FE2_TAS_SAVES = savedTAS
                     state.currentTAS     = tasData
                     state.currentMapName = capMap
+                    refreshSavedList()
                     showNotif("📥 Carregado do GitHub: " .. capMap, true)
                 else
                     showNotif("❌ Dados inválidos no arquivo.", false, 2)
@@ -1157,7 +1476,6 @@ function refreshGitList()
     gitScroll.CanvasSize = UDim2.new(0, 0, 0, #availableMaps * 45)
 end
 
--- Alteração DeepSeek: Refresh conectado a loadMapListFromGitHub
 gitRefreshBtn.MouseButton1Click:Connect(loadMapListFromGitHub)
 
 -- ============================================================
@@ -1220,11 +1538,204 @@ end)
 
 closeBtn.MouseButton1Click:Connect(toggleMinimize)
 
+-- ============================================================
+-- ========== ABA 6: 🎬 CREATE TAS (Mapa Local) ==============
+-- Permite clonar o mapa ativo, remover a água, teleportar e
+-- gravar o TAS sem a pressão do timer e da água subindo.
+-- Implementação baseada nas instruções do DeepSeek.
+-- ============================================================
+do
+    local CREATE_TAB_NAME = "🎬 Create"
+    local newIndex = #tabs + 1
+    table.insert(tabs, CREATE_TAB_NAME)
+
+    -- Redimensiona todas as abas existentes para caber 6
+    local totalTabs = newIndex
+    for i, btn in ipairs(tabButtons) do
+        btn.Size     = UDim2.new(1 / totalTabs, -2, 1, -4)
+        btn.Position = UDim2.new((i - 1) / totalTabs, 1, 0, 2)
+    end
+
+    -- Botão da nova aba
+    local newBtn = Instance.new("TextButton")
+    newBtn.Size             = UDim2.new(1 / totalTabs, -2, 1, -4)
+    newBtn.Position         = UDim2.new((newIndex - 1) / totalTabs, 1, 0, 2)
+    newBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+    newBtn.Text             = CREATE_TAB_NAME
+    newBtn.TextColor3       = Color3.fromRGB(180, 180, 200)
+    newBtn.Font             = Enum.Font.GothamBold
+    newBtn.TextSize         = 8
+    newBtn.Parent           = tabBar
+    Instance.new("UICorner", newBtn).CornerRadius = UDim.new(0, 6)
+    table.insert(tabButtons, newBtn)
+
+    -- Conteúdo da nova aba
+    local newContent = Instance.new("ScrollingFrame")
+    newContent.Size                 = UDim2.new(1, 0, 1, -78)
+    newContent.Position             = UDim2.new(0, 0, 0, 78)
+    newContent.BackgroundTransparency = 1
+    newContent.CanvasSize           = UDim2.new(0, 0, 0, 420)
+    newContent.ScrollBarThickness   = 3
+    newContent.ScrollBarImageColor3 = Color3.fromRGB(0, 160, 255)
+    newContent.Parent               = main
+    newContent.Visible              = false
+    table.insert(tabContents, newContent)
+
+    -- Conecta o botão ao switchTab existente (usa a mesma lógica)
+    newBtn.MouseButton1Click:Connect(function() switchTab(CREATE_TAB_NAME) end)
+    newBtn.MouseEnter:Connect(function()
+        if currentTabName ~= CREATE_TAB_NAME then
+            newBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
+        end
+    end)
+    newBtn.MouseLeave:Connect(function()
+        if currentTabName ~= CREATE_TAB_NAME then
+            newBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
+        end
+    end)
+
+    -- ===== ELEMENTOS DA ABA =====
+    local cy = 10
+
+    local ctTitle = Instance.new("TextLabel")
+    ctTitle.Size = UDim2.new(1, -20, 0, 28)
+    ctTitle.Position = UDim2.new(0, 10, 0, cy)
+    ctTitle.BackgroundTransparency = 1
+    ctTitle.Text = "🎬 Criador de TAS (Mapa Local)"
+    ctTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
+    ctTitle.Font = Enum.Font.GothamBold
+    ctTitle.TextSize = 12
+    ctTitle.TextXAlignment = Enum.TextXAlignment.Left
+    ctTitle.Parent = newContent
+    cy = cy + 35
+
+    local ctDesc = Instance.new("TextLabel")
+    ctDesc.Size = UDim2.new(1, -20, 0, 30)
+    ctDesc.Position = UDim2.new(0, 10, 0, cy)
+    ctDesc.BackgroundTransparency = 1
+    ctDesc.Text = "Clone o mapa, remova a água e grave sem timer."
+    ctDesc.TextColor3 = Color3.fromRGB(140, 160, 200)
+    ctDesc.Font = Enum.Font.Gotham
+    ctDesc.TextSize = 10
+    ctDesc.TextWrapped = true
+    ctDesc.TextXAlignment = Enum.TextXAlignment.Left
+    ctDesc.Parent = newContent
+    cy = cy + 36
+
+    local function makeCtBtn(label, color)
+        local b = Instance.new("TextButton")
+        b.Size            = UDim2.new(0.9, 0, 0, 38)
+        b.Position        = UDim2.new(0.05, 0, 0, cy)
+        b.BackgroundColor3= color
+        b.Text            = label
+        b.TextColor3      = Color3.fromRGB(255, 255, 255)
+        b.Font            = Enum.Font.GothamBold
+        b.TextSize        = 11
+        b.TextWrapped     = true
+        b.Parent          = newContent
+        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
+        addStroke(b, Color3.fromRGB(60, 60, 80), 1)
+        cy = cy + 47
+        return b
+    end
+
+    local cloneBtn   = makeCtBtn("📋 1. CLONAR MAPA ATUAL",         Color3.fromRGB(0, 100, 150))
+    local waterBtn   = makeCtBtn("💧 2. REMOVER ÁGUA DO CLONE",      Color3.fromRGB(150, 80, 0))
+    local teleBtn    = makeCtBtn("🚀 3. TELEPORTAR PARA O CLONE",    Color3.fromRGB(0, 130, 70))
+    local recCloneBtn= makeCtBtn("🔴 4. GRAVAR TAS NO CLONE",        Color3.fromRGB(140, 20, 20))
+    local destroyBtn = makeCtBtn("🗑️ DESTRUIR CLONE",               Color3.fromRGB(60, 60, 70))
+
+    newContent.CanvasSize = UDim2.new(0, 0, 0, cy + 20)
+
+    -- ===== LÓGICA DOS BOTÕES =====
+    local clonedMap = nil
+
+    local function cloneMap()
+        local mp = workspace:FindFirstChild("Multiplayer")
+        if not mp then showNotif("❌ Multiplayer não encontrado", false); return end
+
+        -- Tenta Map primeiro, depois OldMap
+        local mapModel = mp:FindFirstChild("Map") or mp:FindFirstChild("OldMap")
+        if not mapModel then
+            showNotif("❌ Nenhum mapa ativo em Multiplayer", false); return
+        end
+
+        if clonedMap then clonedMap:Destroy() end
+        clonedMap = mapModel:Clone()
+        clonedMap.Name = "TAS_Clone"
+
+        -- Move o clone para longe (X +5000) sem depender de PrimaryPart
+        local pivot = clonedMap:GetPivot()
+        pcall(function()
+            clonedMap:PivotTo(CFrame.new(pivot.Position + Vector3.new(5000, 0, 0)))
+        end)
+
+        clonedMap.Parent = workspace
+        showNotif("✅ Mapa clonado em X+5000! Remova a água.", true, 3)
+    end
+
+    local function removeWater()
+        if not clonedMap then showNotif("❌ Clone não existe ainda", false); return end
+        local count = 0
+        for _, part in ipairs(clonedMap:GetDescendants()) do
+            -- Aceita _Water*, Water* e variações (case-insensitive)
+            if part:IsA("BasePart") and part.Name:lower():find("water") then
+                part:Destroy()
+                count = count + 1
+            end
+        end
+        showNotif(count > 0 and ("💧 " .. count .. " peça(s) de água removidas!") or "⚠️ Nenhuma água encontrada.", count > 0, 3)
+    end
+
+    local function teleportToClone()
+        if not clonedMap then showNotif("❌ Clone não existe", false); return end
+        local char = player.Character
+        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+        if not hrp then showNotif("❌ Personagem inválido", false); return end
+
+        -- Procura ponto de spawn: Start, SpawnLocation, ou PrimaryPart/pivot
+        local spawnPart = clonedMap:FindFirstChild("Start", true)
+                       or clonedMap:FindFirstChild("SpawnLocation", true)
+                       or clonedMap:FindFirstChild("Spawn", true)
+        if spawnPart and spawnPart:IsA("BasePart") then
+            hrp.CFrame = spawnPart.CFrame + Vector3.new(0, 4, 0)
+        else
+            -- Fallback: centro do clone + 10u acima
+            local pivot = clonedMap:GetPivot()
+            hrp.CFrame = CFrame.new(pivot.Position + Vector3.new(0, 10, 0))
+        end
+        hrp.AssemblyLinearVelocity = Vector3.zero
+        showNotif("🚀 Teleportado para o clone! Agora grave.", true, 2)
+    end
+
+    local function recordOnClone()
+        if not clonedMap then showNotif("❌ Clone não existe", false); return end
+        startRecording()
+        showNotif("🔴 Gravando no clone (sem água / sem timer)!", true, 2)
+    end
+
+    local function destroyClone()
+        if clonedMap then
+            clonedMap:Destroy()
+            clonedMap = nil
+            showNotif("🗑️ Clone destruído.", true, 1.5)
+        else
+            showNotif("❌ Nenhum clone para destruir.", false)
+        end
+    end
+
+    cloneBtn.MouseButton1Click:Connect(cloneMap)
+    waterBtn.MouseButton1Click:Connect(removeWater)
+    teleBtn.MouseButton1Click:Connect(teleportToClone)
+    recCloneBtn.MouseButton1Click:Connect(recordOnClone)
+    destroyBtn.MouseButton1Click:Connect(destroyClone)
+end
+
 -- ========== INICIALIZAÇÃO ==========
 updateWcBtnState()
 updateWhBtnState()
+updateAutoPlayBtn()
 refreshSavedList()
--- Alteração DeepSeek: chama loadMapListFromGitHub ao invés de loadLibraryFromGitHub
-loadMapListFromGitHub()
-showNotif("✅ FE2 TAS v15.6 Iniciado!", true, 3)
-print("[FE2 TAS v15.6] Inicializado — modo keyframes por arquivo!")
+-- SEM loadMapListFromGitHub() aqui: o usuário clica no botão da aba TAS Files
+showNotif("✅ FE2 TAS v15.9 FIXED 7 — Clique em TAS Files para baixar os mapas!", true, 4)
+print("[FE2 TAS v15.9 FIXED 7] Inicializado — clique em TAS Files para baixar os mapas.")
