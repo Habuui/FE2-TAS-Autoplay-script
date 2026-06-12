@@ -1480,31 +1480,43 @@ gitRefreshBtn.MouseButton1Click:Connect(loadMapListFromGitHub)
 
 -- ============================================================
 -- ========== UI - ABA BUGS (tab 5) ==========
--- ============================================================
 local bugContainer = tabContents[5]
 
 local bugTitle = Instance.new("TextLabel")
 bugTitle.Size = UDim2.new(1, -20, 0, 30)
 bugTitle.Position = UDim2.new(0, 10, 0, 10)
 bugTitle.BackgroundTransparency = 1
-bugTitle.Text = "🛠️ Central de Soluções de Erros"
+bugTitle.Text = "🐛 Bugs"
 bugTitle.TextColor3 = Color3.fromRGB(255, 200, 50)
 bugTitle.Font = Enum.Font.GothamBold
-bugTitle.TextSize = 12
+bugTitle.TextSize = 13
 bugTitle.TextXAlignment = Enum.TextXAlignment.Left
 bugTitle.Parent = bugContainer
 
-local rebootScriptBtn = Instance.new("TextButton")
-rebootScriptBtn.Size = UDim2.new(0.8, 0, 0, 40)
-rebootScriptBtn.Position = UDim2.new(0.1, 0, 0, 50)
-rebootScriptBtn.BackgroundColor3 = Color3.fromRGB(150, 60, 0)
-rebootScriptBtn.Text = "🔄 REINICIAR TOTALMENTE O SCRIPT"
-rebootScriptBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
-rebootScriptBtn.Font = Enum.Font.GothamBold
-rebootScriptBtn.TextSize = 11
-rebootScriptBtn.Parent = bugContainer
-Instance.new("UICorner", rebootScriptBtn).CornerRadius = UDim.new(0, 8)
-addHoverEffect(rebootScriptBtn, Color3.fromRGB(150, 60, 0), Color3.fromRGB(190, 80, 0))
+local bugDesc = Instance.new("TextLabel")
+bugDesc.Size = UDim2.new(1, -20, 0, 50)
+bugDesc.Position = UDim2.new(0, 10, 0, 48)
+bugDesc.BackgroundTransparency = 1
+bugDesc.Text = "Caso dê algum bug, aperte este botão para fechar o script por completo."
+bugDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
+bugDesc.Font = Enum.Font.Gotham
+bugDesc.TextSize = 11
+bugDesc.TextWrapped = true
+bugDesc.TextXAlignment = Enum.TextXAlignment.Left
+bugDesc.Parent = bugContainer
+
+local stopScriptBtn = Instance.new("TextButton")
+stopScriptBtn.Size = UDim2.new(0.8, 0, 0, 48)
+stopScriptBtn.Position = UDim2.new(0.1, 0, 0, 110)
+stopScriptBtn.BackgroundColor3 = Color3.fromRGB(160, 20, 20)
+stopScriptBtn.Text = "⏹ Parar Script"
+stopScriptBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+stopScriptBtn.Font = Enum.Font.GothamBold
+stopScriptBtn.TextSize = 14
+stopScriptBtn.Parent = bugContainer
+Instance.new("UICorner", stopScriptBtn).CornerRadius = UDim.new(0, 8)
+addStroke(stopScriptBtn, Color3.fromRGB(100, 10, 10), 1.5)
+addHoverEffect(stopScriptBtn, Color3.fromRGB(160, 20, 20), Color3.fromRGB(200, 30, 30))
 
 -- ========== TECLAS DE ATALHO ==========
 local inputConnection
@@ -1524,212 +1536,24 @@ inputConnection = uis.InputBegan:Connect(function(input, gpe)
     end
 end)
 
-rebootScriptBtn.MouseButton1Click:Connect(function()
+-- Botão Parar Script: desconecta tudo e destrói a GUI completamente.
+-- O jogador executa o script pelo executor novamente para reabrir.
+stopScriptBtn.MouseButton1Click:Connect(function()
     if state.recordingConnection then
         for _, conn in ipairs(state.recordingConnection) do
             if conn then pcall(function() conn:Disconnect() end) end
         end
     end
-    if state.playbackConnection then state.playbackConnection:Disconnect() end
-    if inputConnection then inputConnection:Disconnect() end
+    if state.playbackConnection then
+        pcall(function() state.playbackConnection:Disconnect() end)
+    end
+    if inputConnection then
+        pcall(function() inputConnection:Disconnect() end)
+    end
     sg:Destroy()
-    showNotif("🔄 Reiniciando...", true, 1.5)
 end)
 
 closeBtn.MouseButton1Click:Connect(toggleMinimize)
-
--- ============================================================
--- ========== ABA 6: 🎬 CREATE TAS (Mapa Local) ==============
--- Permite clonar o mapa ativo, remover a água, teleportar e
--- gravar o TAS sem a pressão do timer e da água subindo.
--- Implementação baseada nas instruções do DeepSeek.
--- ============================================================
-do
-    local CREATE_TAB_NAME = "🎬 Create"
-    local newIndex = #tabs + 1
-    table.insert(tabs, CREATE_TAB_NAME)
-
-    -- Redimensiona todas as abas existentes para caber 6
-    local totalTabs = newIndex
-    for i, btn in ipairs(tabButtons) do
-        btn.Size     = UDim2.new(1 / totalTabs, -2, 1, -4)
-        btn.Position = UDim2.new((i - 1) / totalTabs, 1, 0, 2)
-    end
-
-    -- Botão da nova aba
-    local newBtn = Instance.new("TextButton")
-    newBtn.Size             = UDim2.new(1 / totalTabs, -2, 1, -4)
-    newBtn.Position         = UDim2.new((newIndex - 1) / totalTabs, 1, 0, 2)
-    newBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
-    newBtn.Text             = CREATE_TAB_NAME
-    newBtn.TextColor3       = Color3.fromRGB(180, 180, 200)
-    newBtn.Font             = Enum.Font.GothamBold
-    newBtn.TextSize         = 8
-    newBtn.Parent           = tabBar
-    Instance.new("UICorner", newBtn).CornerRadius = UDim.new(0, 6)
-    table.insert(tabButtons, newBtn)
-
-    -- Conteúdo da nova aba
-    local newContent = Instance.new("ScrollingFrame")
-    newContent.Size                 = UDim2.new(1, 0, 1, -78)
-    newContent.Position             = UDim2.new(0, 0, 0, 78)
-    newContent.BackgroundTransparency = 1
-    newContent.CanvasSize           = UDim2.new(0, 0, 0, 420)
-    newContent.ScrollBarThickness   = 3
-    newContent.ScrollBarImageColor3 = Color3.fromRGB(0, 160, 255)
-    newContent.Parent               = main
-    newContent.Visible              = false
-    table.insert(tabContents, newContent)
-
-    -- Conecta o botão ao switchTab existente (usa a mesma lógica)
-    newBtn.MouseButton1Click:Connect(function() switchTab(CREATE_TAB_NAME) end)
-    newBtn.MouseEnter:Connect(function()
-        if currentTabName ~= CREATE_TAB_NAME then
-            newBtn.BackgroundColor3 = Color3.fromRGB(38, 38, 50)
-        end
-    end)
-    newBtn.MouseLeave:Connect(function()
-        if currentTabName ~= CREATE_TAB_NAME then
-            newBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 38)
-        end
-    end)
-
-    -- ===== ELEMENTOS DA ABA =====
-    local cy = 10
-
-    local ctTitle = Instance.new("TextLabel")
-    ctTitle.Size = UDim2.new(1, -20, 0, 28)
-    ctTitle.Position = UDim2.new(0, 10, 0, cy)
-    ctTitle.BackgroundTransparency = 1
-    ctTitle.Text = "🎬 Criador de TAS (Mapa Local)"
-    ctTitle.TextColor3 = Color3.fromRGB(255, 200, 100)
-    ctTitle.Font = Enum.Font.GothamBold
-    ctTitle.TextSize = 12
-    ctTitle.TextXAlignment = Enum.TextXAlignment.Left
-    ctTitle.Parent = newContent
-    cy = cy + 35
-
-    local ctDesc = Instance.new("TextLabel")
-    ctDesc.Size = UDim2.new(1, -20, 0, 30)
-    ctDesc.Position = UDim2.new(0, 10, 0, cy)
-    ctDesc.BackgroundTransparency = 1
-    ctDesc.Text = "Clone o mapa, remova a água e grave sem timer."
-    ctDesc.TextColor3 = Color3.fromRGB(140, 160, 200)
-    ctDesc.Font = Enum.Font.Gotham
-    ctDesc.TextSize = 10
-    ctDesc.TextWrapped = true
-    ctDesc.TextXAlignment = Enum.TextXAlignment.Left
-    ctDesc.Parent = newContent
-    cy = cy + 36
-
-    local function makeCtBtn(label, color)
-        local b = Instance.new("TextButton")
-        b.Size            = UDim2.new(0.9, 0, 0, 38)
-        b.Position        = UDim2.new(0.05, 0, 0, cy)
-        b.BackgroundColor3= color
-        b.Text            = label
-        b.TextColor3      = Color3.fromRGB(255, 255, 255)
-        b.Font            = Enum.Font.GothamBold
-        b.TextSize        = 11
-        b.TextWrapped     = true
-        b.Parent          = newContent
-        Instance.new("UICorner", b).CornerRadius = UDim.new(0, 8)
-        addStroke(b, Color3.fromRGB(60, 60, 80), 1)
-        cy = cy + 47
-        return b
-    end
-
-    local cloneBtn   = makeCtBtn("📋 1. CLONAR MAPA ATUAL",         Color3.fromRGB(0, 100, 150))
-    local waterBtn   = makeCtBtn("💧 2. REMOVER ÁGUA DO CLONE",      Color3.fromRGB(150, 80, 0))
-    local teleBtn    = makeCtBtn("🚀 3. TELEPORTAR PARA O CLONE",    Color3.fromRGB(0, 130, 70))
-    local recCloneBtn= makeCtBtn("🔴 4. GRAVAR TAS NO CLONE",        Color3.fromRGB(140, 20, 20))
-    local destroyBtn = makeCtBtn("🗑️ DESTRUIR CLONE",               Color3.fromRGB(60, 60, 70))
-
-    newContent.CanvasSize = UDim2.new(0, 0, 0, cy + 20)
-
-    -- ===== LÓGICA DOS BOTÕES =====
-    local clonedMap = nil
-
-    local function cloneMap()
-        local mp = workspace:FindFirstChild("Multiplayer")
-        if not mp then showNotif("❌ Multiplayer não encontrado", false); return end
-
-        -- Tenta Map primeiro, depois OldMap
-        local mapModel = mp:FindFirstChild("Map") or mp:FindFirstChild("OldMap")
-        if not mapModel then
-            showNotif("❌ Nenhum mapa ativo em Multiplayer", false); return
-        end
-
-        if clonedMap then clonedMap:Destroy() end
-        clonedMap = mapModel:Clone()
-        clonedMap.Name = "TAS_Clone"
-
-        -- Move o clone para longe (X +5000) sem depender de PrimaryPart
-        local pivot = clonedMap:GetPivot()
-        pcall(function()
-            clonedMap:PivotTo(CFrame.new(pivot.Position + Vector3.new(5000, 0, 0)))
-        end)
-
-        clonedMap.Parent = workspace
-        showNotif("✅ Mapa clonado em X+5000! Remova a água.", true, 3)
-    end
-
-    local function removeWater()
-        if not clonedMap then showNotif("❌ Clone não existe ainda", false); return end
-        local count = 0
-        for _, part in ipairs(clonedMap:GetDescendants()) do
-            -- Aceita _Water*, Water* e variações (case-insensitive)
-            if part:IsA("BasePart") and part.Name:lower():find("water") then
-                part:Destroy()
-                count = count + 1
-            end
-        end
-        showNotif(count > 0 and ("💧 " .. count .. " peça(s) de água removidas!") or "⚠️ Nenhuma água encontrada.", count > 0, 3)
-    end
-
-    local function teleportToClone()
-        if not clonedMap then showNotif("❌ Clone não existe", false); return end
-        local char = player.Character
-        local hrp  = char and char:FindFirstChild("HumanoidRootPart")
-        if not hrp then showNotif("❌ Personagem inválido", false); return end
-
-        -- Procura ponto de spawn: Start, SpawnLocation, ou PrimaryPart/pivot
-        local spawnPart = clonedMap:FindFirstChild("Start", true)
-                       or clonedMap:FindFirstChild("SpawnLocation", true)
-                       or clonedMap:FindFirstChild("Spawn", true)
-        if spawnPart and spawnPart:IsA("BasePart") then
-            hrp.CFrame = spawnPart.CFrame + Vector3.new(0, 4, 0)
-        else
-            -- Fallback: centro do clone + 10u acima
-            local pivot = clonedMap:GetPivot()
-            hrp.CFrame = CFrame.new(pivot.Position + Vector3.new(0, 10, 0))
-        end
-        hrp.AssemblyLinearVelocity = Vector3.zero
-        showNotif("🚀 Teleportado para o clone! Agora grave.", true, 2)
-    end
-
-    local function recordOnClone()
-        if not clonedMap then showNotif("❌ Clone não existe", false); return end
-        startRecording()
-        showNotif("🔴 Gravando no clone (sem água / sem timer)!", true, 2)
-    end
-
-    local function destroyClone()
-        if clonedMap then
-            clonedMap:Destroy()
-            clonedMap = nil
-            showNotif("🗑️ Clone destruído.", true, 1.5)
-        else
-            showNotif("❌ Nenhum clone para destruir.", false)
-        end
-    end
-
-    cloneBtn.MouseButton1Click:Connect(cloneMap)
-    waterBtn.MouseButton1Click:Connect(removeWater)
-    teleBtn.MouseButton1Click:Connect(teleportToClone)
-    recCloneBtn.MouseButton1Click:Connect(recordOnClone)
-    destroyBtn.MouseButton1Click:Connect(destroyClone)
-end
 
 -- ========== INICIALIZAÇÃO ==========
 updateWcBtnState()
