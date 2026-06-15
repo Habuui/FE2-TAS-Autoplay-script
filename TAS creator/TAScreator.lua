@@ -1,6 +1,6 @@
 -- [[
 --    TAS CREATOR - FE2 (OVERDUB & SPLICE SYSTEM)
---    Captura e playback idênticos ao padrão nativo v15.9.
+--    Captura e playback idênticos ao padrão nativo.
 --    Sem slow motion. Velocidade de reprodução sempre igual à gravação.
 -- ]]
 
@@ -874,7 +874,7 @@ local function popState()
     if #state.savestates > 0 then table.remove(state.savestates, #state.savestates) end
 end
 
--- ========== GRAVAÇÃO / OVERDUB (CORRIGIDO) ==========
+-- ========== GRAVAÇÃO / OVERDUB ==========
 function toggleRecording()
     if state.isPlaying then stopPlayback(true) end
 
@@ -960,7 +960,7 @@ function toggleRecording()
     end
 end
 
--- ========== EXPORTADOR ==========
+-- ========== EXPORTADOR CORRIGIDO (com inputs) ==========
 local function exportRun()
     if not state.currentTAS or #state.currentTAS == 0 then return end
     local sb = {}
@@ -970,16 +970,25 @@ local function exportRun()
         for idx, val in ipairs(c) do c[idx] = string.format("%.6f", val) end
         local cfStr = string.format("CFrame.new(%s)", table.concat(c, ","))
         local velStr = string.format("Vector3.new(%.6f, %.6f, %.6f)", ev.velocity.X, ev.velocity.Y, ev.velocity.Z)
+        
+        local inputsStr = "nil"
+        if ev.inputs then
+            inputsStr = string.format("{W=%s, A=%s, S=%s, D=%s, Space=%s, E=%s}",
+                tostring(ev.inputs.W), tostring(ev.inputs.A), tostring(ev.inputs.S),
+                tostring(ev.inputs.D), tostring(ev.inputs.Space), tostring(ev.inputs.E))
+        end
+        
         table.insert(sb, string.format(
-            '    {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%d},\n',
-            ev.time, cfStr, velStr, tostring(ev.slideActive), tostring(ev.wallhopFlick), tonumber(ev.humanoidState) or 8
+            '    {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%d,inputs=%s},\n',
+            ev.time, cfStr, velStr, tostring(ev.slideActive), tostring(ev.wallhopFlick),
+            tonumber(ev.humanoidState) or 8, inputsStr
         ))
     end
     table.insert(sb, "}\n")
     local output = table.concat(sb)
     if setclipboard then
         setclipboard(output)
-        print("TAS exportado com sucesso!")
+        print("TAS exportado com inputs incluídos!")
     else
         print(output)
     end
@@ -1084,4 +1093,4 @@ rs.Heartbeat:Connect(function()
     end
 end)
 
-print("TAS CREATOR carregado! Correção do splice aplicada. Gravação a partir do EditMode funciona perfeitamente.")
+print("TAS CREATOR carregado. Exportação agora inclui inputs para playback perfeito.")
