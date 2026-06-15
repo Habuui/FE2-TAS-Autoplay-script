@@ -1,19 +1,11 @@
 --[[
-    FE2 TAS Recorder v15.9 FIXED 7 - SISTEMA DE DOWNLOAD OTIMIZADO
-    Base: v15.9 FIXED 6 (Create TAS, Wallhop/Wallclip originais)
-    Alterações (Gemini / instruções):
-    1. SEM AUTO-LOAD: loadMapListFromGitHub NÃO é mais chamada no startup.
-       O script inicia limpo. O usuário clica no botão da aba TAS Files
-       quando quiser baixar os mapas.
-    2. BARRA DE PROGRESSO VISUAL: durante o download, uma ScreenGui temporária
-       exibe nome do arquivo atual, barra preenchendo conforme progresso,
-       e contador "X/Y (Z%)".
-    3. DOWNLOAD SEQUENCIAL (sem task.spawn por arquivo): elimina o erro 1/14
-       (rate-limit do Roblox). Cada arquivo é baixado um de cada vez com
-       task.wait(0.05) entre eles. refreshSavedList() ao final.
-    4. DETECTOR V17.0 LIMPO: ao detectar mapa, busca SOMENTE em
-       getgenv().FE2_TAS_SAVES. Se não encontrar, notifica para o usuário
-       atualizar a lista. Zero HttpGet no loop de detecção.
+    FE2 TAS Recorder v1 - Sistema de Auto Play e Download de Keyframes
+    Funcionalidades:
+    - Gravação de TAS (keyframes + inputs)
+    - Download de keyframes do GitHub (manual, via botão na aba TAS Files)
+    - Auto Play: detecta mapa pela tela de loading e executa TAS automaticamente
+    - Wallclip e Wallhop manuais
+    - Abas: Gravar, Saves, Player, TAS Files, Bugs
 ]]
 
 local player = game.Players.LocalPlayer
@@ -49,7 +41,6 @@ local oldGui = player:WaitForChild("PlayerGui"):FindFirstChild("FE2_TAS_Recorder
 if oldGui then oldGui:Destroy() end
 
 -- ========== ESTADO ==========
--- Gemini: adicionadas as duas propriedades de automação
 local state = {
     isRecording           = false,
     currentTAS            = {},
@@ -66,8 +57,8 @@ local state = {
     originalJumpPower     = DEFAULT_JUMP_POWER,
     originalRootC0        = nil,
     lastInputStates       = {W=false, A=false, S=false, D=false, Space=false, E=false},
-    autoPlayEnabled       = false,   -- Gemini: toggle de auto play
-    ultimoMapaDetectado   = "",      -- Gemini: evita recarregar o mesmo mapa
+    autoPlayEnabled       = false,
+    ultimoMapaDetectado   = "",
 }
 
 -- ========== AUXILIARES VISUAIS ==========
@@ -154,7 +145,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size             = UDim2.new(1, -50, 1, 0)
 titleText.Position         = UDim2.new(0, 12, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text             = "🎬 FE2 TAS HUD v15.9 (Auto Play)"
+titleText.Text             = "🎬 FE2 TAS HUD v1 (Auto Play)"
 titleText.TextColor3       = Color3.fromRGB(255, 255, 255)
 titleText.TextXAlignment   = Enum.TextXAlignment.Left
 titleText.Font             = Enum.Font.GothamBold
@@ -361,6 +352,14 @@ local function startRecording()
                 moveDirection= humanoid.MoveDirection,
                 humanoidState= humanoid:GetState(),
                 slideActive  = uis:IsKeyDown(Enum.KeyCode.E),
+                inputs = {
+                    W = uis:IsKeyDown(Enum.KeyCode.W),
+                    A = uis:IsKeyDown(Enum.KeyCode.A),
+                    S = uis:IsKeyDown(Enum.KeyCode.S),
+                    D = uis:IsKeyDown(Enum.KeyCode.D),
+                    Space = uis:IsKeyDown(Enum.KeyCode.Space),
+                    E = uis:IsKeyDown(Enum.KeyCode.E)
+                }
             })
         end
     end)
@@ -574,6 +573,16 @@ local function startPlayback()
                     wallhopProcessed = false
                 end
 
+                if ev.inputs then
+                    for keyName, pressed in pairs(ev.inputs) do
+                        local keyCode = KEYS[keyName]
+                        if keyCode and lastApplied[keyName] ~= pressed then
+                            lastApplied[keyName] = pressed
+                            pcall(function() vim:SendKeyEvent(pressed, keyCode, false, game) end)
+                        end
+                    end
+                end
+
             elseif ev.type == "input" then
                 local keyCode = KEYS[ev.key]
                 if keyCode and lastApplied[ev.key] ~= ev.state then
@@ -613,10 +622,7 @@ local function forceReset()
     showNotif("🔄 Estado limpo!", true, 1.5)
 end
 
--- ========== WALLCLIP (original v15.5) ==========
--- Raycast à frente do personagem: se houver parede a menos de 2.2u,
--- teletransporta 5u para a frente atravessando-a.
--- NÃO é noclip — é um teleporte pontual para ultrapassar a parede.
+-- ========== WALLCLIP (original) ==========
 local function fakeWallclip()
     if not state.wallclipEnabled then return end
     local char = player.Character
@@ -635,10 +641,7 @@ local function fakeWallclip()
     end
 end
 
--- ========== WALLHOP MANUAL (original v15.5) ==========
--- Raycast à frente: se houver parede a menos de 1.8u, força pulo (velocity Y=40)
--- e aplica um flick visual no RootJoint. Se estiver gravando, marca wallhopFlick=true
--- no último keyframe para ser reproduzido pelo motor de playback.
+-- ========== WALLHOP MANUAL (original) ==========
 local function fakeWallhop()
     if not state.wallhopEnabled then return end
     local char = player.Character
@@ -657,7 +660,6 @@ local function fakeWallhop()
         task.wait(0.05)
         hrp.Velocity = Vector3.new(hrp.Velocity.X, 40, hrp.Velocity.Z)
 
-        -- Marca wallhopFlick no último keyframe da gravação atual
         if state.isRecording and #state.currentTAS > 0 then
             for i = #state.currentTAS, 1, -1 do
                 if state.currentTAS[i].type == "keyframe" then
@@ -667,7 +669,6 @@ local function fakeWallhop()
             end
         end
 
-        -- Flick visual do RootJoint (igual ao v15.5)
         task.spawn(function()
             local rj = char:FindFirstChild("RootJoint", true)
             if rj then
@@ -681,7 +682,7 @@ local function fakeWallhop()
     end
 end
 
--- ========== EXPORTAÇÃO ==========
+-- ========== EXPORTAÇÃO (CORRIGIDA COM inputs) ==========
 local function serializeVector3(v)
     return string.format("Vector3.new(%f, %f, %f)", v.X, v.Y, v.Z)
 end
@@ -715,9 +716,17 @@ local function exportCurrentTAS(mapName)
             else
                 hStateStr = "8"
             end
+            
+            local inputsStr = "nil"
+            if ev.inputs then
+                inputsStr = string.format("{W=%s, A=%s, S=%s, D=%s, Space=%s, E=%s}",
+                    tostring(ev.inputs.W), tostring(ev.inputs.A), tostring(ev.inputs.S),
+                    tostring(ev.inputs.D), tostring(ev.inputs.Space), tostring(ev.inputs.E))
+            end
+            
             local kfLine = string.format(
-                '    {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%s},',
-                ev.time, cfStr, velStr, slideStr, flickStr, hStateStr
+                '    {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%s,inputs=%s},',
+                ev.time, cfStr, velStr, slideStr, flickStr, hStateStr, inputsStr
             )
             table.insert(lines, kfLine)
         elseif ev.type == "input" then
@@ -748,10 +757,7 @@ local function exportCurrentTAS(mapName)
     end
 end
 
--- ========== GITHUB — DOWNLOAD SOB DEMANDA (ALTERAÇÕES 2 e 3) ==========
--- Chamada apenas pelo botão do usuário (não no startup).
--- Download sequencial com task.wait(0.05) entre arquivos → sem erro 1/14.
--- Barra de progresso visual temporária durante o download.
+-- ========== GITHUB — DOWNLOAD SOB DEMANDA ==========
 local availableMaps = {}
 local refreshGitList
 
@@ -759,7 +765,6 @@ local function loadMapListFromGitHub()
     showNotif("⏳ Conectando ao GitHub...", true, 2)
     task.spawn(function()
 
-        -- ── Passo 1: Busca a lista de arquivos via API ──────────────────
         local success, response = pcall(function()
             return game:HttpGet(API_URL, true)
         end)
@@ -789,7 +794,6 @@ local function loadMapListFromGitHub()
             return
         end
 
-        -- ── Passo 2: Cria a ScreenGui de progresso ─────────────────────
         local progressGui = Instance.new("ScreenGui")
         progressGui.Name         = "FE2_TAS_Progress"
         progressGui.ResetOnSpawn = false
@@ -799,7 +803,6 @@ local function loadMapListFromGitHub()
             progressGui.Parent = player:WaitForChild("PlayerGui")
         end
 
-        -- Fundo principal
         local progFrame = Instance.new("Frame")
         progFrame.Size             = UDim2.new(0, 360, 0, 90)
         progFrame.Position         = UDim2.new(0.5, -180, 1, -130)
@@ -810,7 +813,6 @@ local function loadMapListFromGitHub()
         Instance.new("UICorner", progFrame).CornerRadius = UDim.new(0, 10)
         addStroke(progFrame, Color3.fromRGB(0, 160, 255), 1.5)
 
-        -- Texto do arquivo atual
         local progLabel = Instance.new("TextLabel")
         progLabel.Size             = UDim2.new(1, -16, 0, 28)
         progLabel.Position         = UDim2.new(0, 8, 0, 6)
@@ -823,7 +825,6 @@ local function loadMapListFromGitHub()
         progLabel.TextWrapped      = true
         progLabel.Parent           = progFrame
 
-        -- Fundo da barra
         local barBg = Instance.new("Frame")
         barBg.Size             = UDim2.new(1, -16, 0, 18)
         barBg.Position         = UDim2.new(0, 8, 0, 38)
@@ -832,7 +833,6 @@ local function loadMapListFromGitHub()
         barBg.Parent           = progFrame
         Instance.new("UICorner", barBg).CornerRadius = UDim.new(0, 6)
 
-        -- Barra de preenchimento
         local barFill = Instance.new("Frame")
         barFill.Size             = UDim2.new(0, 0, 1, 0)
         barFill.Position         = UDim2.new(0, 0, 0, 0)
@@ -841,7 +841,6 @@ local function loadMapListFromGitHub()
         barFill.Parent           = barBg
         Instance.new("UICorner", barFill).CornerRadius = UDim.new(0, 6)
 
-        -- Texto de porcentagem sobre a barra
         local barText = Instance.new("TextLabel")
         barText.Size             = UDim2.new(1, 0, 1, 0)
         barText.BackgroundTransparency = 1
@@ -852,7 +851,6 @@ local function loadMapListFromGitHub()
         barText.ZIndex           = 2
         barText.Parent           = barBg
 
-        -- Texto de status embaixo
         local statusProgLabel = Instance.new("TextLabel")
         statusProgLabel.Size   = UDim2.new(1, -16, 0, 20)
         statusProgLabel.Position = UDim2.new(0, 8, 0, 62)
@@ -864,14 +862,11 @@ local function loadMapListFromGitHub()
         statusProgLabel.TextXAlignment = Enum.TextXAlignment.Left
         statusProgLabel.Parent = progFrame
 
-        -- ── Passo 3: Download SEQUENCIAL (sem task.spawn por arquivo) ───
-        -- Evita o erro 1/14 (rate-limit). Um arquivo de cada vez.
         local ok_count  = 0
         local err_count = 0
         local total     = #arquivos
 
         for idx, nomeMapa in ipairs(arquivos) do
-            -- Atualiza barra de progresso
             local progRatio = (idx - 1) / total
             local pct = math.floor(progRatio * 100)
             progLabel.Text = "📥 Baixando: " .. nomeMapa .. ".lua"
@@ -899,39 +894,30 @@ local function loadMapListFromGitHub()
                 err_count = err_count + 1
             end
 
-            -- Delay de segurança entre requisições (evita erro 1/14)
             task.wait(0.05)
         end
 
-        -- Barra 100% ao final
         barFill.Size = UDim2.new(1, 0, 1, 0)
         barText.Text = total .. "/" .. total .. " (100%)"
         progLabel.Text = "✅ Concluído!"
         task.wait(1.2)
 
-        -- Destrói a GUI de progresso
         pcall(function() progressGui:Destroy() end)
 
-        -- Atualiza as listas na interface
         refreshSavedList()
         refreshGitList()
 
         local msg = "✅ " .. ok_count .. "/" .. total .. " mapas baixados e prontos na aba Saves!"
         if err_count > 0 then msg = msg .. " (" .. err_count .. " erro(s))" end
         showNotif(msg, ok_count > 0, 5)
-        print("[FE2 TAS v15.9 FIXED 7] Download concluído: " .. ok_count .. " OK, " .. err_count .. " erros.")
+        print("[FE2 TAS v1] Download concluído: " .. ok_count .. " OK, " .. err_count .. " erros.")
     end)
 end
 
 -- ============================================================
--- ========== DETECTOR V17.0 — MOTOR CORRIGIDO (CORREÇÃO 2) ==
--- isTrulyVisible: sobe toda a hierarquia checando visibilidade.
--- obterScreenGuiDoLoadingAtivo: isola a ScreenGui com "Waiting for"
--- realmente visível — ignora UIs fantasmas/residuais.
--- Loop a 0.15s. Zero HttpGet — usa dados já na memória (pre-load).
+-- ========== DETECTOR DE MAPAS (Auto Play) ==========
 -- ============================================================
 
--- Verifica se um GuiObject está REALMENTE visível (checa todos os ancestrais)
 local function isTrulyVisible(object)
     if not object or not object:IsA("GuiObject") then return false end
     if not object.Visible then return false end
@@ -951,7 +937,6 @@ local function isTrulyVisible(object)
     return true
 end
 
--- Retorna a ScreenGui exata que está mostrando o loading real agora
 local function obterScreenGuiDoLoadingAtivo()
     local pg = player:FindFirstChild("PlayerGui")
     if not pg then return nil end
@@ -965,7 +950,6 @@ local function obterScreenGuiDoLoadingAtivo()
     return nil
 end
 
--- Extrai o nome do mapa do padrão "#1: Nome [Dificuldade]"
 local function extrairNomeMapa(texto)
     local nome = texto:match("#%d+:%s*([^%[%]]+)%s*%[")
     if nome then
@@ -974,17 +958,14 @@ local function extrairNomeMapa(texto)
     return nil
 end
 
--- Loop principal do Detector V17.0
 task.spawn(function()
     while true do
         task.wait(0.15)
         if not state.autoPlayEnabled then continue end
 
-        -- 1. Busca a ScreenGui de loading real
         local guiAtiva = obterScreenGuiDoLoadingAtivo()
         if not guiAtiva then continue end
 
-        -- 2. Extrai o nome do mapa SOMENTE de dentro da guiAtiva
         local mapaAtual = nil
         for _, v in ipairs(guiAtiva:GetDescendants()) do
             if v:IsA("TextLabel") and v.Text and isTrulyVisible(v) then
@@ -997,35 +978,28 @@ task.spawn(function()
         end
         if not mapaAtual then continue end
 
-        -- 3. Ignora se já processamos este mapa
         if mapaAtual == state.ultimoMapaDetectado then continue end
         state.ultimoMapaDetectado = mapaAtual
 
-        -- 4. Remove espaços: "Lost Woods" → "LostWoods"
         local mapaFormatado = mapaAtual:gsub("%s+", "")
 
-        -- 5. Busca keyframes na memória LOCAL — 0ms, zero HttpGet
         local keyframes = savedTAS[mapaFormatado]
         if not keyframes or #keyframes == 0 then
-            -- Alteração 4: mensagem clara orientando o usuário
             showNotif("⚠️ Mapa não baixado! Vá na aba TAS Files e atualize a lista.", false, 4)
-            print("[Detector V17] Mapa sem keyframes locais: " .. mapaFormatado)
+            print("[Detector] Mapa sem keyframes locais: " .. mapaFormatado)
             continue
         end
 
         state.currentTAS     = keyframes
         state.currentMapName = mapaFormatado
 
-        -- 6. Notificação imediata com contagem de keyframes
         showNotif("🎯 Mapa: " .. mapaAtual .. " | KF: " .. #keyframes, true, 4)
-        print("[Detector V17] Detectado: " .. mapaAtual .. " — " .. #keyframes .. " eventos")
+        print("[Detector] Detectado: " .. mapaAtual .. " — " .. #keyframes .. " eventos")
 
-        -- 7. Aguarda o loading sumir monitorando a guiAtiva (timeout 90s)
         local timeout = 0
         while timeout < 600 do
             task.wait(0.15)
             timeout = timeout + 1
-            -- Verifica se a guiAtiva ainda está ativa
             local ainda_ativa = false
             pcall(function()
                 ainda_ativa = guiAtiva.Parent ~= nil and guiAtiva.Enabled
@@ -1034,10 +1008,8 @@ task.spawn(function()
             if not ainda_ativa then break end
         end
 
-        -- 8. Pausa de segurança para spawn do personagem
         task.wait(0.6)
 
-        -- 9. Dispara o TAS automaticamente
         if state.autoPlayEnabled and #state.currentTAS > 0 then
             showNotif("🤖 Executando TAS: " .. mapaAtual, true, 2)
             startPlayback()
@@ -1050,7 +1022,6 @@ end)
 -- ============================================================
 local grabContainer = tabContents[1]
 
--- ===== BOTÃO AUTO PLAY (Gemini) — posicionado no topo da aba =====
 local autoPlayBtn = Instance.new("TextButton")
 autoPlayBtn.Size            = UDim2.new(0.8, 0, 0, 42)
 autoPlayBtn.Position        = UDim2.new(0.1, 0, 0, 8)
@@ -1078,7 +1049,6 @@ end
 autoPlayBtn.MouseButton1Click:Connect(function()
     state.autoPlayEnabled = not state.autoPlayEnabled
     if state.autoPlayEnabled then
-        -- Ao ativar, reseta o último mapa para forçar re-detecção
         state.ultimoMapaDetectado = ""
     end
     updateAutoPlayBtn()
@@ -1088,9 +1058,7 @@ autoPlayBtn.MouseButton1Click:Connect(function()
         2
     )
 end)
--- ===== FIM BOTÃO AUTO PLAY =====
 
--- Os demais elementos da aba Gravar ficam deslocados +55px para acomodar o botão
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 30)
 statusLabel.Position = UDim2.new(0, 10, 0, 58)
@@ -1437,7 +1405,6 @@ function refreshGitList()
 
         local capMap = mapName
         loadB.MouseButton1Click:Connect(function()
-            -- Verifica primeiro na memória local (pre-load)
             local localData = savedTAS[capMap]
             if localData and #localData > 0 then
                 state.currentTAS     = localData
@@ -1445,7 +1412,6 @@ function refreshGitList()
                 showNotif("📂 Carregado da memória: " .. capMap, true)
                 return
             end
-            -- Fallback: baixa do GitHub se não estiver em cache
             local url = KEYFRAMES_BASE_URL .. capMap .. ".lua"
             showNotif("⏳ Baixando " .. capMap .. "...", true, 1.5)
             task.spawn(function()
@@ -1536,8 +1502,6 @@ inputConnection = uis.InputBegan:Connect(function(input, gpe)
     end
 end)
 
--- Botão Parar Script: desconecta tudo e destrói a GUI completamente.
--- O jogador executa o script pelo executor novamente para reabrir.
 stopScriptBtn.MouseButton1Click:Connect(function()
     if state.recordingConnection then
         for _, conn in ipairs(state.recordingConnection) do
@@ -1560,6 +1524,5 @@ updateWcBtnState()
 updateWhBtnState()
 updateAutoPlayBtn()
 refreshSavedList()
--- SEM loadMapListFromGitHub() aqui: o usuário clica no botão da aba TAS Files
-showNotif("✅ FE2 TAS v15.9 FIXED 7 — Clique em TAS Files para baixar os mapas!", true, 4)
-print("[FE2 TAS v15.9 FIXED 7] Inicializado — clique em TAS Files para baixar os mapas.")
+showNotif("✅ FE2 TAS v1 — Clique em TAS Files para baixar os mapas!", true, 4)
+print("[FE2 TAS v1] Inicializado — clique em TAS Files para baixar os mapas.")
