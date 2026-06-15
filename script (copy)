@@ -1,0 +1,1 @@
+loadstring(game:HttpGet('https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/script%20(execute)', true))()
