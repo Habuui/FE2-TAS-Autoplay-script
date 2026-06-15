@@ -1,1 +1,7 @@
 I recommend doing it on a PC, using a Mumu Player emulator, or directly on a PC.
+
+here is: 
+
+loadstring(game:HttpGet('https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/refs/heads/main/TAS%20creator/TAScreator.lua', true))()
+
+execute this in the executor, have fun :)
