@@ -1,11 +1,10 @@
 --[[
-    FE2 TAS Recorder v1 - Sistema de Auto Play e Download de Keyframes
-    Funcionalidades:
-    - Gravação de TAS (keyframes + inputs)
-    - Download de keyframes do GitHub (manual, via botão na aba TAS Files)
-    - Auto Play: detecta mapa pela tela de loading e executa TAS automaticamente
-    - Wallclip e Wallhop manuais
-    - Abas: Gravar, Saves, Player, TAS Files, Bugs
+    FE2 TAS RECORDER - Auto Play & Keyframe Download System
+    FIXES APPLIED:
+    - Playback engine replaced with pure frame-by-frame (same as TAS creator)
+    - Removed ch.Velocity (deprecated); uses only AssemblyLinearVelocity
+    - Removed AutoRotate=false which interfered with character rotation
+    - wallhopFlick without task.spawn to avoid physics race condition
 ]]
 
 local player = game.Players.LocalPlayer
@@ -15,7 +14,7 @@ local hs = game:GetService("HttpService")
 local vim = game:GetService("VirtualInputManager")
 local ts = game:GetService("TweenService")
 
--- ========== CONFIGURAÇÕES GLOBAIS ==========
+-- ========== GLOBAL SETTINGS ==========
 local DEFAULT_WALK_SPEED = 20
 local DEFAULT_JUMP_POWER = 50
 
@@ -31,7 +30,7 @@ local KEYS = {
     E = Enum.KeyCode.E
 }
 
--- ========== PERSISTÊNCIA ==========
+-- ========== PERSISTENCE ==========
 if not getgenv().FE2_TAS_SAVES then
     getgenv().FE2_TAS_SAVES = {}
 end
@@ -40,7 +39,7 @@ local savedTAS = getgenv().FE2_TAS_SAVES
 local oldGui = player:WaitForChild("PlayerGui"):FindFirstChild("FE2_TAS_Recorder") or game.CoreGui:FindFirstChild("FE2_TAS_Recorder")
 if oldGui then oldGui:Destroy() end
 
--- ========== ESTADO ==========
+-- ========== STATE ==========
 local state = {
     isRecording           = false,
     currentTAS            = {},
@@ -61,7 +60,7 @@ local state = {
     ultimoMapaDetectado   = "",
 }
 
--- ========== AUXILIARES VISUAIS ==========
+-- ========== VISUAL HELPERS ==========
 local function addStroke(parent, color, thickness)
     local stroke = Instance.new("UIStroke")
     stroke.Color = color
@@ -145,7 +144,7 @@ local titleText = Instance.new("TextLabel")
 titleText.Size             = UDim2.new(1, -50, 1, 0)
 titleText.Position         = UDim2.new(0, 12, 0, 0)
 titleText.BackgroundTransparency = 1
-titleText.Text             = "🎬 FE2 TAS HUD v1 (Auto Play)"
+titleText.Text             = "🎬 FE2 TAS RECORDER (Auto Play)"
 titleText.TextColor3       = Color3.fromRGB(255, 255, 255)
 titleText.TextXAlignment   = Enum.TextXAlignment.Left
 titleText.Font             = Enum.Font.GothamBold
@@ -165,7 +164,7 @@ closeBtn.Parent              = titleBar
 closeBtn.MouseEnter:Connect(function() closeBtn.TextColor3 = Color3.fromRGB(255, 70, 70) end)
 closeBtn.MouseLeave:Connect(function() closeBtn.TextColor3 = Color3.fromRGB(200, 200, 200) end)
 
--- ========== ABAS ==========
+-- ========== TABS ==========
 local tabBar = Instance.new("Frame")
 tabBar.Size             = UDim2.new(1, 0, 0, 40)
 tabBar.Position         = UDim2.new(0, 0, 0, 38)
@@ -173,7 +172,7 @@ tabBar.BackgroundColor3 = Color3.fromRGB(20, 20, 28)
 tabBar.BorderSizePixel  = 0
 tabBar.Parent           = main
 
-local tabs        = {"🎮 Gravar", "💾 Saves", "🏃 Player", "📁 TAS Files", "🐛 Bugs"}
+local tabs        = {"🎮 Record", "💾 Saves", "🏃 Player", "📁 TAS Files", "🐛 Bugs"}
 local tabButtons  = {}
 local tabContents = {}
 local currentTabName = "🎮 Gravar"
@@ -232,7 +231,7 @@ for i, tabName in ipairs(tabs) do
     end)
 end
 
--- ========== NOTIFICAÇÃO ==========
+-- ========== NOTIFICATION ==========
 local notifFrame = nil
 local function showNotif(msg, isGood, duration)
     duration = duration or 2
@@ -271,12 +270,12 @@ local function showNotif(msg, isGood, duration)
     end)
 end
 
--- ========== MINIMIZAR ==========
+-- ========== MINIMIZE ==========
 local function toggleMinimize()
     state.isMinimized = not state.isMinimized
     if state.isMinimized then
         main.Visible = false
-        showNotif("🙈 HUD Ocultado! Pressione N para exibir", true, 1.5)
+        showNotif("🙈 HUD Hidden! Press N to show", true, 1.5)
     else
         main.Visible = true
         switchTab(currentTabName)
@@ -285,10 +284,10 @@ end
 
 local refreshSavedList
 
--- ========== SALVAR / DELETAR TAS Local ==========
+-- ========== SAVE / DELETE LOCAL TAS ==========
 local function saveTAS(name)
     if #state.currentTAS < 10 then
-        showNotif("❌ Poucos frames para salvar!", false)
+        showNotif("❌ Not enough frames to save!", false)
         return false
     end
     if name == nil or name == "" then name = "TAS_" .. os.time() end
@@ -302,7 +301,7 @@ local function saveTAS(name)
 
     savedTAS[finalName]       = state.currentTAS
     getgenv().FE2_TAS_SAVES   = savedTAS
-    showNotif("💾 Salvo localmente: " .. finalName, true)
+    showNotif("💾 Saved locally: " .. finalName, true)
     refreshSavedList()
     return true
 end
@@ -311,12 +310,12 @@ local function deleteTAS(name)
     if savedTAS[name] then
         savedTAS[name]          = nil
         getgenv().FE2_TAS_SAVES = savedTAS
-        showNotif("🗑️ Deletado: " .. name, true)
+        showNotif("🗑️ Deleted: " .. name, true)
         refreshSavedList()
     end
 end
 
--- ========== GRAVAÇÃO ==========
+-- ========== RECORDING ==========
 local recordingStartTime = 0
 local inputConnections   = nil
 
@@ -336,7 +335,7 @@ local function startRecording()
     recordingStartTime   = tick()
 
     for k in pairs(state.lastInputStates) do state.lastInputStates[k] = false end
-    showNotif("🔴 GRAVAÇÃO INICIADA! Pressione G para parar", true)
+    showNotif("🔴 RECORDING STARTED! Press G to stop", true)
 
     local kfConn = rs.Stepped:Connect(function()
         if not state.isRecording then return end
@@ -345,20 +344,20 @@ local function startRecording()
             local hrp      = char.HumanoidRootPart
             local humanoid = char.Humanoid
             table.insert(state.currentTAS, {
-                type         = "keyframe",
-                time         = tick() - recordingStartTime,
-                cframe       = hrp.CFrame,
-                velocity     = hrp.Velocity,
-                moveDirection= humanoid.MoveDirection,
-                humanoidState= humanoid:GetState(),
-                slideActive  = uis:IsKeyDown(Enum.KeyCode.E),
+                type          = "keyframe",
+                time          = tick() - recordingStartTime,
+                cframe        = hrp.CFrame,
+                velocity      = hrp.AssemblyLinearVelocity,
+                moveDirection = humanoid.MoveDirection,
+                humanoidState = humanoid:GetState(),
+                slideActive   = uis:IsKeyDown(Enum.KeyCode.E),
                 inputs = {
-                    W = uis:IsKeyDown(Enum.KeyCode.W),
-                    A = uis:IsKeyDown(Enum.KeyCode.A),
-                    S = uis:IsKeyDown(Enum.KeyCode.S),
-                    D = uis:IsKeyDown(Enum.KeyCode.D),
+                    W     = uis:IsKeyDown(Enum.KeyCode.W),
+                    A     = uis:IsKeyDown(Enum.KeyCode.A),
+                    S     = uis:IsKeyDown(Enum.KeyCode.S),
+                    D     = uis:IsKeyDown(Enum.KeyCode.D),
                     Space = uis:IsKeyDown(Enum.KeyCode.Space),
-                    E = uis:IsKeyDown(Enum.KeyCode.E)
+                    E     = uis:IsKeyDown(Enum.KeyCode.E)
                 }
             })
         end
@@ -396,7 +395,7 @@ local function startRecording()
 
     local ibConn = uis.InputBegan:Connect(onInputBegan)
     local ieConn = uis.InputEnded:Connect(onInputEnded)
-    inputConnections      = {kfConn, ibConn, ieConn}
+    inputConnections          = {kfConn, ibConn, ieConn}
     state.recordingConnection = inputConnections
 end
 
@@ -411,14 +410,14 @@ local function stopRecording()
     end
     table.sort(state.currentTAS, function(a, b) return a.time < b.time end)
     if #state.currentTAS > 10 then
-        showNotif("⏹️ Gravação concluída! (" .. #state.currentTAS .. " eventos)", true)
+        showNotif("⏹️ Recording done! (" .. #state.currentTAS .. " events)", true)
     else
-        showNotif("⚠️ Poucos eventos gravados!", false)
+        showNotif("⚠️ Too few events recorded!", false)
         state.currentTAS = {}
     end
 end
 
--- ========== RESTAURAR CONTROLE ==========
+-- ========== RESTORE CONTROL ==========
 local function restoreCharacterControl()
     if state.isPlaying then
         state.isPlaying = false
@@ -434,8 +433,8 @@ local function restoreCharacterControl()
     if char then
         local humanoid = char:FindFirstChild("Humanoid")
         if humanoid then
-            humanoid.WalkSpeed = DEFAULT_WALK_SPEED
-            humanoid.JumpPower = DEFAULT_JUMP_POWER
+            humanoid.WalkSpeed  = DEFAULT_WALK_SPEED
+            humanoid.JumpPower  = DEFAULT_JUMP_POWER
             humanoid.AutoRotate = true
         end
         if state.originalRootC0 then
@@ -454,16 +453,21 @@ local function interruptPlayback()
         state.playbackConnection = nil
     end
     restoreCharacterControl()
-    showNotif("⏹️ Reprodução cancelada!", false, 2)
+    showNotif("⏹️ Playback cancelled!", false, 2)
 end
 
--- ========== REPRODUÇÃO HÍBRIDA ==========
+-- ========== PLAYBACK ENGINE (pure frame-by-frame, same as TAS creator) ==========
+-- MAIN FIX: replaced the real-time elapsed-based engine with pure frame-by-frame.
+-- Reason: the real-time engine processed multiple frames per step under lag,
+-- causing visible teleports and replaying 'ghost' frames the player had
+-- discarded during TAS creator editing. Frame-by-frame is deterministic:
+-- always 1 frame per physics tick, identical to TAS creator internal playback.
 local function startPlayback()
     local now = tick()
     if now - state.lastPlaybackCall < 0.5 then return end
     state.lastPlaybackCall = now
 
-    if #state.currentTAS == 0 then showNotif("❌ Nenhum TAS carregado!", false); return end
+    if #state.currentTAS == 0 then showNotif("❌ No TAS loaded!", false); return end
     if state.isPlaying then interruptPlayback(); task.wait(0.05) end
 
     local char = player.Character
@@ -472,23 +476,19 @@ local function startPlayback()
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
 
-    state.originalWalkSpeed = humanoid.WalkSpeed
-    state.originalJumpPower = humanoid.JumpPower
-    humanoid.WalkSpeed = DEFAULT_WALK_SPEED
-    humanoid.JumpPower = DEFAULT_JUMP_POWER
-    humanoid.AutoRotate = false
-
-    local rootJoint = char:FindFirstChild("RootJoint", true)
-    if rootJoint then state.originalRootC0 = rootJoint.C0 else state.originalRootC0 = nil end
-
+    -- Filter only keyframes to position character at the start
     local firstKF = nil
     for _, ev in ipairs(state.currentTAS) do
         if ev.type == "keyframe" then firstKF = ev; break end
     end
     if firstKF and firstKF.cframe then
-        hrp.CFrame   = firstKF.cframe
-        hrp.Velocity = Vector3.zero
+        hrp.CFrame = firstKF.cframe
+        hrp.AssemblyLinearVelocity = Vector3.zero
     end
+
+    -- Save original RootJoint for wallhop
+    local rootJoint = char:FindFirstChild("RootJoint", true)
+    if rootJoint then state.originalRootC0 = rootJoint.C0 else state.originalRootC0 = nil end
 
     task.wait(0.1)
 
@@ -497,119 +497,136 @@ local function startPlayback()
         restoreCharacterControl(); return
     end
 
-    state.isPlaying        = true
-    state.playbackStartTime= tick()
-    local eventIndex       = 1
-    local totalEvents      = #state.currentTAS
-    local lastSlideState   = false
-    local lastApplied      = {}
+    state.isPlaying = true
+    showNotif("▶️ PLAYING...", true)
+
+    -- Separate keyframes from inputs for the frame-by-frame engine
+    -- and apply inputs embedded in each keyframe (inputs={} field)
+    local keyframes   = {}
+    local inputEvents = {}
+    for _, ev in ipairs(state.currentTAS) do
+        if ev.type == "keyframe" then
+            table.insert(keyframes, ev)
+        elseif ev.type == "input" then
+            table.insert(inputEvents, ev)
+        end
+    end
+
+    local totalKeyframes = #keyframes
+    local playbackIndex  = 1
+    local inputIndex     = 1
+    local totalInputs    = #inputEvents
+    local lastApplied    = {}
     for k in pairs(KEYS) do lastApplied[k] = false end
+    local lastSlideState  = false
     local wallhopProcessed = false
-    local isFlicking       = false
+    -- Time anchor: same system as TAS creator.
+    -- elapsed = time elapsed + first keyframe time.
+    -- Guarantees playback speed faithful to recording, no acceleration or slowdown.
+    local startTick = tick()
+    local firstFrameTime = keyframes[1] and keyframes[1].time or 0
 
-    showNotif("▶️ REPRODUZINDO...", true)
-
+    if state.playbackConnection then state.playbackConnection:Disconnect() end
     state.playbackConnection = rs.Stepped:Connect(function()
         if not state.isPlaying then return end
+
         local cc = player.Character
         if not cc or not cc:FindFirstChild("HumanoidRootPart") or not cc:FindFirstChild("Humanoid") then
             restoreCharacterControl()
-            showNotif("❌ Personagem interrompido.", false)
+            showNotif("❌ Character interrupted.", false)
             return
         end
-        local ch    = cc.HumanoidRootPart
-        local hum   = cc.Humanoid
-        local elapsed = tick() - state.playbackStartTime
 
-        while eventIndex <= totalEvents and state.currentTAS[eventIndex].time <= elapsed do
-            local ev = state.currentTAS[eventIndex]
-
-            if ev.type == "keyframe" then
-                if ev.cframe   then ch.CFrame   = ev.cframe end
-                if ev.velocity then
-                    ch.Velocity             = ev.velocity
-                    ch.AssemblyLinearVelocity = ev.velocity
-                end
-
-                if ev.humanoidState then
-                    local currentEnum = hum:GetState()
-                    local isDifferent = false
-                    if type(ev.humanoidState) == "number" then
-                        isDifferent = (currentEnum.Value ~= ev.humanoidState)
-                    else
-                        isDifferent = (currentEnum ~= ev.humanoidState)
-                    end
-                    if isDifferent then
-                        hum:ChangeState(ev.humanoidState)
-                    end
-                end
-
-                if hum.WalkSpeed ~= DEFAULT_WALK_SPEED then hum.WalkSpeed = DEFAULT_WALK_SPEED end
-
-                if ev.slideActive ~= nil and ev.slideActive ~= lastSlideState then
-                    lastSlideState = ev.slideActive
-                    vim:SendKeyEvent(ev.slideActive, Enum.KeyCode.E, false, game)
-                end
-
-                if state.wallhopEnabled and ev.wallhopFlick and not wallhopProcessed and not isFlicking then
-                    wallhopProcessed = true
-                    isFlicking       = true
-                    task.spawn(function()
-                        if hum and hum.Parent then
-                            hum:ChangeState(Enum.HumanoidStateType.Jumping)
-                            task.wait(0.05)
-                            ch.Velocity = Vector3.new(ch.Velocity.X, 40, ch.Velocity.Z)
-                            local rj = cc:FindFirstChild("RootJoint", true)
-                            if rj and state.originalRootC0 then
-                                local orig = state.originalRootC0
-                                pcall(function() rj.C0 = orig * CFrame.Angles(0, 0, math.rad(65)) end)
-                                task.wait(0.08)
-                                pcall(function() if rj and rj.Parent then rj.C0 = orig end end)
-                            end
-                        end
-                        isFlicking = false
-                    end)
-                elseif not ev.wallhopFlick then
-                    wallhopProcessed = false
-                end
-
-                if ev.inputs then
-                    for keyName, pressed in pairs(ev.inputs) do
-                        local keyCode = KEYS[keyName]
-                        if keyCode and lastApplied[keyName] ~= pressed then
-                            lastApplied[keyName] = pressed
-                            pcall(function() vim:SendKeyEvent(pressed, keyCode, false, game) end)
-                        end
-                    end
-                end
-
-            elseif ev.type == "input" then
-                local keyCode = KEYS[ev.key]
-                if keyCode and lastApplied[ev.key] ~= ev.state then
-                    lastApplied[ev.key] = ev.state
-                    pcall(function() vim:SendKeyEvent(ev.state, keyCode, false, game) end)
-                end
-            end
-
-            eventIndex = eventIndex + 1
-        end
-
-        if eventIndex > totalEvents then
+        if playbackIndex > totalKeyframes then
+            -- Release all keys on finish
             for key, code in pairs(KEYS) do
                 if lastApplied[key] then
                     pcall(function() vim:SendKeyEvent(false, code, false, game) end)
+                    lastApplied[key] = false
                 end
             end
-            if lastSlideState then vim:SendKeyEvent(false, Enum.KeyCode.E, false, game) end
-
+            if lastSlideState then
+                pcall(function() vim:SendKeyEvent(false, Enum.KeyCode.E, false, game) end)
+            end
             state.isPlaying = false
             if state.playbackConnection then
                 state.playbackConnection:Disconnect()
                 state.playbackConnection = nil
             end
             restoreCharacterControl()
-            showNotif("✅ REPRODUÇÃO FINALIZADA!", true, 2.5)
+            showNotif("✅ PLAYBACK FINISHED!", true, 2.5)
+            return
         end
+
+        local ch  = cc.HumanoidRootPart
+        local hum = cc.Humanoid
+        local kf  = keyframes[playbackIndex]
+
+        -- Só processa o frame se o tempo real já chegou nele
+        local elapsed = (tick() - startTick) + firstFrameTime
+        if kf.time > elapsed then return end
+
+        -- Apply keyframe position and velocity
+        -- FIX: uses only AssemblyLinearVelocity (Velocity is deprecated and caused conflicts)
+        if kf.cframe then ch.CFrame = kf.cframe end
+        if kf.velocity then ch.AssemblyLinearVelocity = kf.velocity end
+
+        -- Apply Humanoid state
+        if kf.humanoidState then
+            local stateVal = type(kf.humanoidState) == "number" and kf.humanoidState or kf.humanoidState.Value
+            pcall(function() hum:ChangeState(stateVal) end)
+        end
+
+        -- Slide (E key)
+        if kf.slideActive ~= nil and kf.slideActive ~= lastSlideState then
+            lastSlideState = kf.slideActive
+            pcall(function() vim:SendKeyEvent(kf.slideActive, Enum.KeyCode.E, false, game) end)
+        end
+
+        -- Wallhop: no task.spawn to avoid physics race condition
+        if state.wallhopEnabled and kf.wallhopFlick and not wallhopProcessed then
+            wallhopProcessed = true
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            ch.AssemblyLinearVelocity = Vector3.new(ch.AssemblyLinearVelocity.X, 40, ch.AssemblyLinearVelocity.Z)
+            local rj = cc:FindFirstChild("RootJoint", true)
+            if rj and state.originalRootC0 then
+                local orig = state.originalRootC0
+                pcall(function() rj.C0 = orig * CFrame.Angles(0, 0, math.rad(65)) end)
+                -- The visual flick is undone automatically on the next frame
+                -- since the next applyFrame will restore the correct position
+            end
+        elseif not kf.wallhopFlick then
+            wallhopProcessed = false
+            -- Restore RootJoint if it was flicked on the previous frame
+            local rj = cc:FindFirstChild("RootJoint", true)
+            if rj and state.originalRootC0 then
+                pcall(function() rj.C0 = state.originalRootC0 end)
+            end
+        end
+
+        -- Inputs embedded in keyframe (inputs={W,A,S,D,Space,E} field)
+        if kf.inputs then
+            for keyName, pressed in pairs(kf.inputs) do
+                local keyCode = KEYS[keyName]
+                if keyCode and lastApplied[keyName] ~= pressed then
+                    lastApplied[keyName] = pressed
+                    pcall(function() vim:SendKeyEvent(pressed, keyCode, false, game) end)
+                end
+            end
+        end
+
+        -- Separate inputs aligned by real elapsed time
+        while inputIndex <= totalInputs and inputEvents[inputIndex].time <= elapsed do
+            local ev = inputEvents[inputIndex]
+            local keyCode = KEYS[ev.key]
+            if keyCode and lastApplied[ev.key] ~= ev.state then
+                lastApplied[ev.key] = ev.state
+                pcall(function() vim:SendKeyEvent(ev.state, keyCode, false, game) end)
+            end
+            inputIndex = inputIndex + 1
+        end
+
+        playbackIndex = playbackIndex + 1
     end)
 end
 
@@ -619,10 +636,10 @@ local function forceReset()
     if state.isPlaying    then interruptPlayback() end
     state.currentTAS     = {}
     state.currentMapName = ""
-    showNotif("🔄 Estado limpo!", true, 1.5)
+    showNotif("🔄 State cleared!", true, 1.5)
 end
 
--- ========== WALLCLIP (original) ==========
+-- ========== WALLCLIP ==========
 local function fakeWallclip()
     if not state.wallclipEnabled then return end
     local char = player.Character
@@ -641,7 +658,7 @@ local function fakeWallclip()
     end
 end
 
--- ========== WALLHOP MANUAL (original) ==========
+-- ========== MANUAL WALLHOP ==========
 local function fakeWallhop()
     if not state.wallhopEnabled then return end
     local char = player.Character
@@ -658,7 +675,7 @@ local function fakeWallhop()
     if ray and ray.Distance < 1.8 then
         humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
         task.wait(0.05)
-        hrp.Velocity = Vector3.new(hrp.Velocity.X, 40, hrp.Velocity.Z)
+        hrp.AssemblyLinearVelocity = Vector3.new(hrp.AssemblyLinearVelocity.X, 40, hrp.AssemblyLinearVelocity.Z)
 
         if state.isRecording and #state.currentTAS > 0 then
             for i = #state.currentTAS, 1, -1 do
@@ -682,7 +699,7 @@ local function fakeWallhop()
     end
 end
 
--- ========== EXPORTAÇÃO (CORRIGIDA COM inputs) ==========
+-- ========== EXPORT ==========
 local function serializeVector3(v)
     return string.format("Vector3.new(%f, %f, %f)", v.X, v.Y, v.Z)
 end
@@ -716,25 +733,21 @@ local function exportCurrentTAS(mapName)
             else
                 hStateStr = "8"
             end
-            
-            local inputsStr = "nil"
-            if ev.inputs then
-                inputsStr = string.format("{W=%s, A=%s, S=%s, D=%s, Space=%s, E=%s}",
-                    tostring(ev.inputs.W), tostring(ev.inputs.A), tostring(ev.inputs.S),
-                    tostring(ev.inputs.D), tostring(ev.inputs.Space), tostring(ev.inputs.E))
-            end
-            
-            local kfLine = string.format(
+            local inp = ev.inputs or {}
+            local inputsStr = string.format("{W=%s,A=%s,S=%s,D=%s,Space=%s,E=%s}",
+                tostring(inp.W or false), tostring(inp.A or false),
+                tostring(inp.S or false), tostring(inp.D or false),
+                tostring(inp.Space or false), tostring(inp.E or false))
+
+            table.insert(lines, string.format(
                 '    {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%s,inputs=%s},',
                 ev.time, cfStr, velStr, slideStr, flickStr, hStateStr, inputsStr
-            )
-            table.insert(lines, kfLine)
+            ))
         elseif ev.type == "input" then
-            local inputLine = string.format(
+            table.insert(lines, string.format(
                 '    {type="input",time=%f,key="%s",state=%s},',
                 ev.time, ev.key, tostring(ev.state)
-            )
-            table.insert(lines, inputLine)
+            ))
         end
     end
     table.insert(lines, "}")
@@ -748,34 +761,31 @@ local function exportCurrentTAS(mapName)
     end
 
     if copied then
-        showNotif("📤 Copiado! Cole em /keyframes/" .. mapName .. ".lua", true, 4)
+        showNotif("📤 Copied! Paste into /keyframes/" .. mapName .. ".lua", true, 4)
     else
-        print("\n=== COLE ISSO EM /keyframes/" .. mapName .. ".lua ===\n")
         print(output)
-        print("\n=====================================================\n")
-        showNotif("⚠️ setclipboard não suportado! Texto impresso no F9.", false, 4)
+        showNotif("⚠️ setclipboard not supported! Text printed to F9.", false, 4)
     end
 end
 
--- ========== GITHUB — DOWNLOAD SOB DEMANDA ==========
+-- ========== GITHUB — ON-DEMAND DOWNLOAD ==========
 local availableMaps = {}
 local refreshGitList
 
 local function loadMapListFromGitHub()
-    showNotif("⏳ Conectando ao GitHub...", true, 2)
+    showNotif("⏳ Connecting to GitHub...", true, 2)
     task.spawn(function()
-
         local success, response = pcall(function()
             return game:HttpGet(API_URL, true)
         end)
         if not success or not response or response == "" then
-            showNotif("❌ Falha ao acessar API do GitHub.", false, 3)
+            showNotif("❌ Failed to access GitHub API.", false, 3)
             return
         end
 
         local ok, data = pcall(function() return hs:JSONDecode(response) end)
         if not ok or type(data) ~= "table" then
-            showNotif("❌ Erro ao processar lista de arquivos.", false, 3)
+            showNotif("❌ Error processing file list.", false, 3)
             return
         end
 
@@ -789,7 +799,7 @@ local function loadMapListFromGitHub()
         availableMaps = arquivos
 
         if #arquivos == 0 then
-            showNotif("⚠️ Nenhum .lua em /keyframes.", false, 3)
+            showNotif("⚠️ No .lua files in /keyframes.", false, 3)
             refreshGitList()
             return
         end
@@ -817,7 +827,7 @@ local function loadMapListFromGitHub()
         progLabel.Size             = UDim2.new(1, -16, 0, 28)
         progLabel.Position         = UDim2.new(0, 8, 0, 6)
         progLabel.BackgroundTransparency = 1
-        progLabel.Text             = "📥 Preparando..."
+        progLabel.Text             = "📥 Preparing..."
         progLabel.TextColor3       = Color3.fromRGB(180, 220, 255)
         progLabel.Font             = Enum.Font.GothamBold
         progLabel.TextSize         = 11
@@ -835,7 +845,6 @@ local function loadMapListFromGitHub()
 
         local barFill = Instance.new("Frame")
         barFill.Size             = UDim2.new(0, 0, 1, 0)
-        barFill.Position         = UDim2.new(0, 0, 0, 0)
         barFill.BackgroundColor3 = Color3.fromRGB(0, 200, 100)
         barFill.BorderSizePixel  = 0
         barFill.Parent           = barBg
@@ -855,7 +864,7 @@ local function loadMapListFromGitHub()
         statusProgLabel.Size   = UDim2.new(1, -16, 0, 20)
         statusProgLabel.Position = UDim2.new(0, 8, 0, 62)
         statusProgLabel.BackgroundTransparency = 1
-        statusProgLabel.Text   = "Aguarde — não feche o script"
+        statusProgLabel.Text   = "Please wait — do not close the script"
         statusProgLabel.TextColor3 = Color3.fromRGB(120, 130, 160)
         statusProgLabel.Font   = Enum.Font.Gotham
         statusProgLabel.TextSize = 9
@@ -893,31 +902,25 @@ local function loadMapListFromGitHub()
             else
                 err_count = err_count + 1
             end
-
             task.wait(0.05)
         end
 
         barFill.Size = UDim2.new(1, 0, 1, 0)
         barText.Text = total .. "/" .. total .. " (100%)"
-        progLabel.Text = "✅ Concluído!"
+        progLabel.Text = "✅ Done!"
         task.wait(1.2)
-
         pcall(function() progressGui:Destroy() end)
 
         refreshSavedList()
         refreshGitList()
 
-        local msg = "✅ " .. ok_count .. "/" .. total .. " mapas baixados e prontos na aba Saves!"
-        if err_count > 0 then msg = msg .. " (" .. err_count .. " erro(s))" end
+        local msg = "✅ " .. ok_count .. "/" .. total .. " maps downloaded!"
+        if err_count > 0 then msg = msg .. " (" .. err_count .. " error(s))" end
         showNotif(msg, ok_count > 0, 5)
-        print("[FE2 TAS v1] Download concluído: " .. ok_count .. " OK, " .. err_count .. " erros.")
     end)
 end
 
--- ============================================================
--- ========== DETECTOR DE MAPAS (Auto Play) ==========
--- ============================================================
-
+-- ========== MAP DETECTOR ==========
 local function isTrulyVisible(object)
     if not object or not object:IsA("GuiObject") then return false end
     if not object.Visible then return false end
@@ -929,9 +932,7 @@ local function isTrulyVisible(object)
         elseif current:IsA("ScreenGui") then
             if not current.Enabled then return false end
             break
-        else
-            break
-        end
+        else break end
         current = current.Parent
     end
     return true
@@ -952,9 +953,7 @@ end
 
 local function extrairNomeMapa(texto)
     local nome = texto:match("#%d+:%s*([^%[%]]+)%s*%[")
-    if nome then
-        return nome:match("^%s*(.-)%s*$")
-    end
+    if nome then return nome:match("^%s*(.-)%s*$") end
     return nil
 end
 
@@ -970,31 +969,23 @@ task.spawn(function()
         for _, v in ipairs(guiAtiva:GetDescendants()) do
             if v:IsA("TextLabel") and v.Text and isTrulyVisible(v) then
                 local nome = extrairNomeMapa(v.Text)
-                if nome and nome ~= "" then
-                    mapaAtual = nome
-                    break
-                end
+                if nome and nome ~= "" then mapaAtual = nome; break end
             end
         end
         if not mapaAtual then continue end
-
         if mapaAtual == state.ultimoMapaDetectado then continue end
         state.ultimoMapaDetectado = mapaAtual
 
         local mapaFormatado = mapaAtual:gsub("%s+", "")
-
         local keyframes = savedTAS[mapaFormatado]
         if not keyframes or #keyframes == 0 then
-            showNotif("⚠️ Mapa não baixado! Vá na aba TAS Files e atualize a lista.", false, 4)
-            print("[Detector] Mapa sem keyframes locais: " .. mapaFormatado)
+            showNotif("⚠️ Map not downloaded! Go to TAS Files tab and update the list.", false, 4)
             continue
         end
 
         state.currentTAS     = keyframes
         state.currentMapName = mapaFormatado
-
-        showNotif("🎯 Mapa: " .. mapaAtual .. " | KF: " .. #keyframes, true, 4)
-        print("[Detector] Detectado: " .. mapaAtual .. " — " .. #keyframes .. " eventos")
+        showNotif("🎯 Map: " .. mapaAtual .. " | KF: " .. #keyframes, true, 4)
 
         local timeout = 0
         while timeout < 600 do
@@ -1009,24 +1000,21 @@ task.spawn(function()
         end
 
         task.wait(0.6)
-
         if state.autoPlayEnabled and #state.currentTAS > 0 then
-            showNotif("🤖 Executando TAS: " .. mapaAtual, true, 2)
+            showNotif("🤖 Running TAS: " .. mapaAtual, true, 2)
             startPlayback()
         end
     end
 end)
 
--- ============================================================
--- ========== UI - ABA GRAVAR (tab 1) ==========
--- ============================================================
+-- ========== UI - RECORD TAB ==========
 local grabContainer = tabContents[1]
 
 local autoPlayBtn = Instance.new("TextButton")
 autoPlayBtn.Size            = UDim2.new(0.8, 0, 0, 42)
 autoPlayBtn.Position        = UDim2.new(0.1, 0, 0, 8)
 autoPlayBtn.BackgroundColor3= Color3.fromRGB(35, 35, 45)
-autoPlayBtn.Text            = "🤖 Auto Play: DESATIVADO"
+autoPlayBtn.Text            = "🤖 Auto Play: OFF"
 autoPlayBtn.TextColor3      = Color3.fromRGB(200, 200, 220)
 autoPlayBtn.Font            = Enum.Font.GothamBold
 autoPlayBtn.TextSize        = 13
@@ -1037,25 +1025,22 @@ applyShineStroke(autoPlayBtn, Color3.fromRGB(60, 60, 80), Color3.fromRGB(180, 18
 local function updateAutoPlayBtn()
     if state.autoPlayEnabled then
         autoPlayBtn.BackgroundColor3 = Color3.fromRGB(15, 80, 45)
-        autoPlayBtn.Text             = "🤖 Auto Play: ATIVADO"
+        autoPlayBtn.Text             = "🤖 Auto Play: ON"
         autoPlayBtn.TextColor3       = Color3.fromRGB(80, 255, 150)
     else
         autoPlayBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 45)
-        autoPlayBtn.Text             = "🤖 Auto Play: DESATIVADO"
+        autoPlayBtn.Text             = "🤖 Auto Play: OFF"
         autoPlayBtn.TextColor3       = Color3.fromRGB(200, 200, 220)
     end
 end
 
 autoPlayBtn.MouseButton1Click:Connect(function()
     state.autoPlayEnabled = not state.autoPlayEnabled
-    if state.autoPlayEnabled then
-        state.ultimoMapaDetectado = ""
-    end
+    if state.autoPlayEnabled then state.ultimoMapaDetectado = "" end
     updateAutoPlayBtn()
     showNotif(
-        state.autoPlayEnabled and "🤖 Auto Play ATIVADO! Aguardando mapa..." or "🤖 Auto Play DESATIVADO.",
-        state.autoPlayEnabled,
-        2
+        state.autoPlayEnabled and "🤖 Auto Play ON!" or "🤖 Auto Play OFF.",
+        state.autoPlayEnabled, 2
     )
 end)
 
@@ -1063,7 +1048,7 @@ local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(1, -20, 0, 30)
 statusLabel.Position = UDim2.new(0, 10, 0, 58)
 statusLabel.BackgroundTransparency = 1
-statusLabel.Text = "⚫ Nenhuma gravação"
+statusLabel.Text = "⚫ Idle"
 statusLabel.TextColor3 = Color3.fromRGB(180, 180, 220)
 statusLabel.Font = Enum.Font.GothamBold
 statusLabel.TextSize = 12
@@ -1085,7 +1070,7 @@ local recBtn = Instance.new("TextButton")
 recBtn.Size = UDim2.new(0.8, 0, 0, 40)
 recBtn.Position = UDim2.new(0.1, 0, 0, 120)
 recBtn.BackgroundColor3 = Color3.fromRGB(140, 20, 20)
-recBtn.Text = "🔴 INICIAR GRAVAÇÃO (G)"
+recBtn.Text = "🔴 START RECORDING (G)"
 recBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 recBtn.Font = Enum.Font.GothamBold
 recBtn.TextSize = 13
@@ -1098,7 +1083,7 @@ local stopRecBtn = Instance.new("TextButton")
 stopRecBtn.Size = UDim2.new(0.8, 0, 0, 40)
 stopRecBtn.Position = UDim2.new(0.1, 0, 0, 170)
 stopRecBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 55)
-stopRecBtn.Text = "⏹️ PARAR GRAVAÇÃO (G)"
+stopRecBtn.Text = "⏹️ STOP RECORDING (G)"
 stopRecBtn.TextColor3 = Color3.fromRGB(230, 230, 230)
 stopRecBtn.Font = Enum.Font.GothamBold
 stopRecBtn.TextSize = 12
@@ -1111,7 +1096,7 @@ local playBtn = Instance.new("TextButton")
 playBtn.Size = UDim2.new(0.8, 0, 0, 40)
 playBtn.Position = UDim2.new(0.1, 0, 0, 220)
 playBtn.BackgroundColor3 = Color3.fromRGB(20, 120, 60)
-playBtn.Text = "▶️ REPRODUZIR GRAVAÇÃO (R)"
+playBtn.Text = "▶️ PLAY RECORDING (R)"
 playBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 playBtn.Font = Enum.Font.GothamBold
 playBtn.TextSize = 13
@@ -1125,7 +1110,7 @@ mapInput.Size = UDim2.new(0.8, 0, 0, 35)
 mapInput.Position = UDim2.new(0.1, 0, 0, 275)
 mapInput.BackgroundColor3 = Color3.fromRGB(22, 23, 30)
 mapInput.Text = ""
-mapInput.PlaceholderText = "Nome do mapa para exportar..."
+mapInput.PlaceholderText = "Map name to export..."
 mapInput.TextColor3 = Color3.fromRGB(255, 255, 255)
 mapInput.Font = Enum.Font.Gotham
 mapInput.TextSize = 11
@@ -1137,7 +1122,7 @@ local expBtn = Instance.new("TextButton")
 expBtn.Size = UDim2.new(0.8, 0, 0, 38)
 expBtn.Position = UDim2.new(0.1, 0, 0, 320)
 expBtn.BackgroundColor3 = Color3.fromRGB(0, 100, 180)
-expBtn.Text = "📤 EXPORTAR TAS (Arquivo p/ /keyframes/)"
+expBtn.Text = "📤 EXPORT TAS"
 expBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 expBtn.Font = Enum.Font.GothamBold
 expBtn.TextSize = 12
@@ -1149,7 +1134,7 @@ local clearBtn = Instance.new("TextButton")
 clearBtn.Size = UDim2.new(0.8, 0, 0, 35)
 clearBtn.Position = UDim2.new(0.1, 0, 0, 368)
 clearBtn.BackgroundColor3 = Color3.fromRGB(35, 35, 42)
-clearBtn.Text = "🗑️ LIMPAR ESTADO"
+clearBtn.Text = "🗑️ CLEAR STATE"
 clearBtn.TextColor3 = Color3.fromRGB(200, 140, 140)
 clearBtn.Font = Enum.Font.GothamBold
 clearBtn.TextSize = 11
@@ -1160,19 +1145,19 @@ addHoverEffect(clearBtn, Color3.fromRGB(35, 35, 42), Color3.fromRGB(50, 40, 48))
 task.spawn(function()
     while task.wait(0.2) do
         if state.isRecording then
-            statusLabel.Text = "🔴 GRAVANDO TAS..."
+            statusLabel.Text = "🔴 RECORDING TAS..."
             statusLabel.TextColor3 = Color3.fromRGB(255, 50, 50)
         elseif state.isPlaying then
-            statusLabel.Text = "▶️ REPRODUZINDO TAS..."
+            statusLabel.Text = "▶️ PLAYING TAS..."
             statusLabel.TextColor3 = Color3.fromRGB(50, 255, 120)
         elseif state.autoPlayEnabled then
-            statusLabel.Text = "🤖 Auto Play ativo — aguardando mapa..."
+            statusLabel.Text = "🤖 Auto Play active — waiting for map..."
             statusLabel.TextColor3 = Color3.fromRGB(80, 200, 255)
         else
-            statusLabel.Text = "⚫ Parado"
+            statusLabel.Text = "⚫ Idle"
             statusLabel.TextColor3 = Color3.fromRGB(180, 180, 220)
         end
-        frameLabel.Text = "📹 Eventos na Memória: " .. #state.currentTAS
+        frameLabel.Text = "📹 Events in Memory: " .. #state.currentTAS
     end
 end)
 
@@ -1182,9 +1167,7 @@ playBtn.MouseButton1Click:Connect(startPlayback)
 expBtn.MouseButton1Click:Connect(function() exportCurrentTAS(mapInput.Text) end)
 clearBtn.MouseButton1Click:Connect(forceReset)
 
--- ============================================================
--- ========== UI - ABA SAVES LOCAIS (tab 2) ==========
--- ============================================================
+-- ========== UI - SAVES TAB ==========
 local savesContainer = tabContents[2]
 
 local saveNameInput = Instance.new("TextBox")
@@ -1192,7 +1175,7 @@ saveNameInput.Size = UDim2.new(0.5, -15, 0, 35)
 saveNameInput.Position = UDim2.new(0, 10, 0, 10)
 saveNameInput.BackgroundColor3 = Color3.fromRGB(22, 23, 30)
 saveNameInput.Text = ""
-saveNameInput.PlaceholderText = "Nome do Save..."
+saveNameInput.PlaceholderText = "Save Name..."
 saveNameInput.TextColor3 = Color3.fromRGB(255, 255, 255)
 saveNameInput.Font = Enum.Font.Gotham
 saveNameInput.TextSize = 11
@@ -1204,7 +1187,7 @@ local saveBtn = Instance.new("TextButton")
 saveBtn.Size = UDim2.new(0.5, -15, 0, 35)
 saveBtn.Position = UDim2.new(0.5, 5, 0, 10)
 saveBtn.BackgroundColor3 = Color3.fromRGB(0, 130, 70)
-saveBtn.Text = "💾 SALVAR ATUAL"
+saveBtn.Text = "💾 SAVE CURRENT"
 saveBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 saveBtn.Font = Enum.Font.GothamBold
 saveBtn.TextSize = 11
@@ -1273,7 +1256,7 @@ function refreshSavedList()
         loadB.MouseButton1Click:Connect(function()
             state.currentTAS = data
             state.currentMapName = name
-            showNotif("📂 Carregado para memória: " .. name, true)
+            showNotif("📂 Loaded into memory: " .. name, true)
         end)
         delB.MouseButton1Click:Connect(function() deleteTAS(name) end)
     end
@@ -1284,9 +1267,7 @@ saveBtn.MouseButton1Click:Connect(function()
     if saveTAS(saveNameInput.Text) then saveNameInput.Text = "" end
 end)
 
--- ============================================================
--- ========== UI - ABA PLAYER CONFIG (tab 3) ==========
--- ============================================================
+-- ========== UI - PLAYER TAB ==========
 local plyContainer = tabContents[3]
 
 local wcToggle = Instance.new("TextButton")
@@ -1307,34 +1288,25 @@ Instance.new("UICorner", whToggle).CornerRadius = UDim.new(0, 8)
 
 local function updateWcBtnState()
     wcToggle.BackgroundColor3 = state.wallclipEnabled and Color3.fromRGB(30, 100, 60) or Color3.fromRGB(100, 30, 30)
-    wcToggle.Text = state.wallclipEnabled and "🌀 WALLCLIP MANUAL: ATIVADO (Ctrl)" or "🌀 WALLCLIP MANUAL: DESATIVADO"
+    wcToggle.Text = state.wallclipEnabled and "🌀 MANUAL WALLCLIP: ON (Ctrl)" or "🌀 MANUAL WALLCLIP: OFF"
 end
 
 local function updateWhBtnState()
     whToggle.BackgroundColor3 = state.wallhopEnabled and Color3.fromRGB(30, 100, 60) or Color3.fromRGB(100, 30, 30)
-    whToggle.Text = state.wallhopEnabled and "🚀 WALLHOP AUTOMÁTICO: ATIVADO (Espaço)" or "🚀 WALLHOP AUTOMÁTICO: DESATIVADO"
+    whToggle.Text = state.wallhopEnabled and "🚀 AUTO WALLHOP: ON (Space)" or "🚀 AUTO WALLHOP: OFF"
 end
 
-wcToggle.MouseButton1Click:Connect(function()
-    state.wallclipEnabled = not state.wallclipEnabled
-    updateWcBtnState()
-end)
+wcToggle.MouseButton1Click:Connect(function() state.wallclipEnabled = not state.wallclipEnabled; updateWcBtnState() end)
+whToggle.MouseButton1Click:Connect(function() state.wallhopEnabled = not state.wallhopEnabled; updateWhBtnState() end)
 
-whToggle.MouseButton1Click:Connect(function()
-    state.wallhopEnabled = not state.wallhopEnabled
-    updateWhBtnState()
-end)
-
--- ============================================================
--- ========== UI - ABA TAS FILES / GITHUB (tab 4) ==========
--- ============================================================
+-- ========== UI - TAS FILES TAB ==========
 local gitContainer = tabContents[4]
 
 local gitRefreshBtn = Instance.new("TextButton")
 gitRefreshBtn.Size = UDim2.new(0.8, 0, 0, 35)
 gitRefreshBtn.Position = UDim2.new(0.1, 0, 0, 10)
 gitRefreshBtn.BackgroundColor3 = Color3.fromRGB(90, 30, 140)
-gitRefreshBtn.Text = "🔄 CARREGAR / ATUALIZAR LISTA DE MAPAS"
+gitRefreshBtn.Text = "🔄 LOAD / UPDATE MAP LIST"
 gitRefreshBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 gitRefreshBtn.Font = Enum.Font.GothamBold
 gitRefreshBtn.TextSize = 11
@@ -1358,12 +1330,11 @@ function refreshGitList()
     for _, c in ipairs(gitScroll:GetChildren()) do
         if c:IsA("Frame") then c:Destroy() end
     end
-
     if #availableMaps == 0 then
         local empty = Instance.new("TextLabel")
         empty.Size = UDim2.new(1, 0, 0, 40)
         empty.BackgroundTransparency = 1
-        empty.Text = "Nenhum arquivo .lua encontrado na pasta keyframes."
+        empty.Text = "No .lua files found."
         empty.TextColor3 = Color3.fromRGB(130, 130, 150)
         empty.Font = Enum.Font.Gotham
         empty.TextSize = 11
@@ -1371,7 +1342,6 @@ function refreshGitList()
         gitScroll.CanvasSize = UDim2.new(0, 0, 0, 45)
         return
     end
-
     for _, mapName in ipairs(availableMaps) do
         local item = Instance.new("Frame")
         item.Size = UDim2.new(1, 0, 0, 40)
@@ -1409,32 +1379,26 @@ function refreshGitList()
             if localData and #localData > 0 then
                 state.currentTAS     = localData
                 state.currentMapName = capMap
-                showNotif("📂 Carregado da memória: " .. capMap, true)
+                showNotif("📂 Loaded from memory: " .. capMap, true)
                 return
             end
             local url = KEYFRAMES_BASE_URL .. capMap .. ".lua"
-            showNotif("⏳ Baixando " .. capMap .. "...", true, 1.5)
+            showNotif("⏳ Downloading " .. capMap .. "...", true, 1.5)
             task.spawn(function()
                 local ok, code = pcall(function() return game:HttpGet(url, true) end)
-                if not ok or not code then
-                    showNotif("❌ Falha ao baixar o mapa: " .. capMap, false, 2)
-                    return
-                end
+                if not ok or not code then showNotif("❌ Failed to download: " .. capMap, false, 2); return end
                 local func, err = loadstring(code)
-                if not func then
-                    showNotif("❌ Erro no arquivo: " .. tostring(err), false, 2)
-                    return
-                end
+                if not func then showNotif("❌ File error.", false, 2); return end
                 local tasData = func()
                 if type(tasData) == "table" and #tasData > 0 then
                     savedTAS[capMap]        = tasData
                     getgenv().FE2_TAS_SAVES = savedTAS
-                    state.currentTAS     = tasData
-                    state.currentMapName = capMap
+                    state.currentTAS        = tasData
+                    state.currentMapName    = capMap
                     refreshSavedList()
-                    showNotif("📥 Carregado do GitHub: " .. capMap, true)
+                    showNotif("📥 Loaded from GitHub: " .. capMap, true)
                 else
-                    showNotif("❌ Dados inválidos no arquivo.", false, 2)
+                    showNotif("❌ Invalid data in file.", false, 2)
                 end
             end)
         end)
@@ -1444,8 +1408,7 @@ end
 
 gitRefreshBtn.MouseButton1Click:Connect(loadMapListFromGitHub)
 
--- ============================================================
--- ========== UI - ABA BUGS (tab 5) ==========
+-- ========== UI - BUGS TAB ==========
 local bugContainer = tabContents[5]
 
 local bugTitle = Instance.new("TextLabel")
@@ -1463,7 +1426,7 @@ local bugDesc = Instance.new("TextLabel")
 bugDesc.Size = UDim2.new(1, -20, 0, 50)
 bugDesc.Position = UDim2.new(0, 10, 0, 48)
 bugDesc.BackgroundTransparency = 1
-bugDesc.Text = "Caso dê algum bug, aperte este botão para fechar o script por completo."
+bugDesc.Text = "If a bug occurs, press this button to fully close the script."
 bugDesc.TextColor3 = Color3.fromRGB(170, 170, 190)
 bugDesc.Font = Enum.Font.Gotham
 bugDesc.TextSize = 11
@@ -1475,7 +1438,7 @@ local stopScriptBtn = Instance.new("TextButton")
 stopScriptBtn.Size = UDim2.new(0.8, 0, 0, 48)
 stopScriptBtn.Position = UDim2.new(0.1, 0, 0, 110)
 stopScriptBtn.BackgroundColor3 = Color3.fromRGB(160, 20, 20)
-stopScriptBtn.Text = "⏹ Parar Script"
+stopScriptBtn.Text = "⏹ Stop Script"
 stopScriptBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 stopScriptBtn.Font = Enum.Font.GothamBold
 stopScriptBtn.TextSize = 14
@@ -1484,7 +1447,7 @@ Instance.new("UICorner", stopScriptBtn).CornerRadius = UDim.new(0, 8)
 addStroke(stopScriptBtn, Color3.fromRGB(100, 10, 10), 1.5)
 addHoverEffect(stopScriptBtn, Color3.fromRGB(160, 20, 20), Color3.fromRGB(200, 30, 30))
 
--- ========== TECLAS DE ATALHO ==========
+-- ========== KEYBINDS ==========
 local inputConnection
 inputConnection = uis.InputBegan:Connect(function(input, gpe)
     if isTyping() then return end
@@ -1519,10 +1482,10 @@ end)
 
 closeBtn.MouseButton1Click:Connect(toggleMinimize)
 
--- ========== INICIALIZAÇÃO ==========
+-- ========== INITIALIZATION ==========
 updateWcBtnState()
 updateWhBtnState()
 updateAutoPlayBtn()
 refreshSavedList()
-showNotif("✅ FE2 TAS v1 — Clique em TAS Files para baixar os mapas!", true, 4)
-print("[FE2 TAS v1] Inicializado — clique em TAS Files para baixar os mapas.")
+showNotif("✅ FE2 TAS RECORDER — Click TAS Files to download maps!", true, 4)
+print("[FE2 TAS RECORDER] Loaded with fixed frame-by-frame playback engine.")
