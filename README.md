@@ -10,6 +10,7 @@ loadstring(game:HttpGet('https://raw.githubusercontent.com/Habuui/FE2-TAS-Autopl
 I used AI to create the script, and for me, it's quite exciting to have this kind of technology in the palm of our hand—a technology that in the past would have been worth millions...
 
 Disclaimer
+
 This project is intended for educational purposes only. It demonstrates concepts related to movement automation and tool-assisted speedrunning (TAS) in games. The code is provided as-is, and the author does not endorse or encourage any use that violates the terms of service of any game or platform.
 
 Use at your own risk. I am not responsible for any consequences, including account penalties, resulting from the use of this software.
