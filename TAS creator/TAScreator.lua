@@ -1,7 +1,7 @@
 -- [[
---    TAS CREATOR - FE2 (OVERDUB & SPLICE SYSTEM)
---    Captura e playback idênticos ao padrão nativo.
---    Sem slow motion. Velocidade de reprodução sempre igual à gravação.
+--    FE2 TAS CREATOR - OVERDUB & SPLICE SYSTEM
+--    Capture and playback identical to native v15.9 standard.
+--    No slow motion. Playback speed always matches recording.
 -- ]]
 
 local player = game.Players.LocalPlayer
@@ -10,7 +10,7 @@ local rs = game:GetService("RunService")
 local vim = game:GetService("VirtualInputManager")
 local mouse = player:GetMouse()
 
--- ========== ESTADO GLOBAL ==========
+-- ========== GLOBAL STATE ==========
 local state = {
     isRecording = false,
     isPaused = false,
@@ -46,7 +46,7 @@ local recordingConnection = nil
 local pauseCamConnection = nil
 local uiUpdateConnection = nil
 
--- ========== FORMATAÇÃO DE TEMPO ==========
+-- ========== TIME FORMATTING ==========
 local function formatTime(seconds)
     local mins = math.floor(seconds / 60)
     local secs = math.floor(seconds % 60)
@@ -224,7 +224,7 @@ tipsLabel.Text =
 tipsLabel.ZIndex = mainPanel.ZIndex + 2
 tipsLabel.Parent = rightPanel
 
--- Arrastar HUD
+-- Drag HUD
 local dragging, dragInput, dragStart, startPos
 mainPanel.InputBegan:Connect(function(input)
     if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
@@ -287,7 +287,7 @@ local timelineTitle = Instance.new("TextLabel")
 timelineTitle.Size = UDim2.new(1, 0, 0, 14)
 timelineTitle.Position = UDim2.new(0, 12, 0, 4)
 timelineTitle.BackgroundTransparency = 1
-timelineTitle.Text = "LINHA DO TEMPO"
+timelineTitle.Text = "TIMELINE"
 timelineTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
 timelineTitle.TextTransparency = 0.35
 timelineTitle.Font = Enum.Font.GothamBold
@@ -370,7 +370,7 @@ tlFrameLabel.Text = "0 / 0"
 tlFrameLabel.ZIndex = timelinePanel.ZIndex + 2
 tlFrameLabel.Parent = timelinePanel
 
--- ========== JANELA DE IMPORTAÇÃO ==========
+-- ========== IMPORT WINDOW ==========
 local importPanel = Instance.new("Frame")
 importPanel.Size = UDim2.new(0, 420, 0, 320)
 importPanel.Position = UDim2.new(0.5, -210, 0.5, -160)
@@ -410,7 +410,7 @@ local importTitle = Instance.new("TextLabel")
 importTitle.Size = UDim2.new(1, -50, 0, 36)
 importTitle.Position = UDim2.new(0, 14, 0, 4)
 importTitle.BackgroundTransparency = 1
-importTitle.Text = "IMPORTAR TAS"
+importTitle.Text = "IMPORT TAS"
 importTitle.TextColor3 = Color3.fromRGB(255, 255, 255)
 importTitle.Font = Enum.Font.GothamBold
 importTitle.TextSize = 13
@@ -466,7 +466,7 @@ importTextBox.MultiLine = true
 importTextBox.ClearTextOnFocus = false
 importTextBox.Text = ""
 importTextBox.TextColor3 = Color3.fromRGB(210, 210, 230)
-importTextBox.PlaceholderText = "Cole aqui os keyframes nativos do Github..."
+importTextBox.PlaceholderText = "Paste native keyframes from Github here..."
 importTextBox.PlaceholderColor3 = Color3.fromRGB(80, 80, 100)
 importTextBox.Font = Enum.Font.Code
 importTextBox.TextSize = 11
@@ -488,7 +488,7 @@ runImportBtn.Position = UDim2.new(0, 14, 0, 274)
 runImportBtn.BackgroundColor3 = Color3.fromRGB(60, 60, 200)
 runImportBtn.BackgroundTransparency = 0.15
 runImportBtn.BorderSizePixel = 0
-runImportBtn.Text = "⬇  CARREGAR NA MEMÓRIA"
+runImportBtn.Text = "⬇  LOAD INTO MEMORY"
 runImportBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 runImportBtn.Font = Enum.Font.GothamBold
 runImportBtn.TextSize = 12
@@ -529,7 +529,7 @@ runImportBtn.MouseButton1Click:Connect(function()
                 end
             end
             importPanel.Visible = false
-            print("TAS importado com sucesso! (" .. #parsedTAS .. " frames)")
+            print("TAS imported successfully! (" .. #parsedTAS .. " frames)")
         end
     end
 end)
@@ -594,24 +594,24 @@ uiUpdateConnection = rs.Heartbeat:Connect(function()
     savestateLabel.Text = string.format("Savestates: %d", #state.savestates)
 
     if state.isPlaying then
-        statusLabel.Text = "●  REPRODUZINDO"
+        statusLabel.Text = "●  PLAYING"
         statusLabel.TextColor3 = Color3.fromRGB(0, 210, 255)
         accentBar.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
         tlAccent.BackgroundColor3 = Color3.fromRGB(0, 140, 255)
     elseif state.isEditMode then
         local cutTxt = state.isCutMode and "  ✂ " .. tostring(state.cutStartFrameIndex) or ""
-        statusLabel.Text = "●  MODO EDIÇÃO" .. cutTxt
+        statusLabel.Text = "●  EDIT MODE" .. cutTxt
         statusLabel.TextColor3 = Color3.fromRGB(200, 100, 255)
         accentBar.BackgroundColor3 = Color3.fromRGB(160, 60, 220)
         tlAccent.BackgroundColor3 = Color3.fromRGB(160, 60, 220)
     elseif state.isRecording then
         if state.isPaused then
-            statusLabel.Text = "●  PAUSADO"
+            statusLabel.Text = "●  PAUSED"
             statusLabel.TextColor3 = Color3.fromRGB(255, 165, 0)
             accentBar.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
             tlAccent.BackgroundColor3 = Color3.fromRGB(200, 120, 0)
         else
-            statusLabel.Text = "●  GRAVANDO"
+            statusLabel.Text = "●  RECORDING"
             statusLabel.TextColor3 = Color3.fromRGB(255, 70, 70)
             accentBar.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
             tlAccent.BackgroundColor3 = Color3.fromRGB(220, 40, 40)
@@ -660,7 +660,7 @@ uiUpdateConnection = rs.Heartbeat:Connect(function()
     end
 end)
 
--- ========== NOCLIP SELETIVO ==========
+-- ========== SELECTIVE NOCLIP ==========
 local function toggleMouseTargetCollision()
     local target = mouse.Target
     if target and target:IsA("BasePart") then
@@ -678,7 +678,7 @@ local function toggleMouseTargetCollision()
     end
 end
 
--- ========== CAPTURA DE FRAME ==========
+-- ========== FRAME CAPTURE (native v15.9 standard) ==========
 local spaceHistoric = false
 local function captureFrame()
     local char = player.Character
@@ -713,7 +713,7 @@ local function captureFrame()
     }
 end
 
--- ========== PAUSA FÍSICA ==========
+-- ========== PHYSICS PAUSE ==========
 local function setPause(isPaused)
     state.isPaused = isPaused
     local char = player.Character
@@ -737,6 +737,15 @@ local function setPause(isPaused)
             end
         end)
     else
+        -- FIX 2: when resuming from pause during recording, truncate frames ahead
+        -- of currentFrameIndex immediately, without waiting for the next recording loop.
+        -- Ensures rewinding with [4] and resuming leaves no orphan frames.
+        if state.isRecording then
+            for i = #state.currentTAS, state.currentFrameIndex + 1, -1 do
+                table.remove(state.currentTAS, i)
+            end
+            state.accumulatedTime = state.currentTAS[state.currentFrameIndex] and state.currentTAS[state.currentFrameIndex].time or state.accumulatedTime
+        end
         if not state.isEditMode then hrp.Anchored = false end
         if hum then hum.AutoRotate = true end
         if pauseCamConnection then pauseCamConnection:Disconnect() pauseCamConnection = nil end
@@ -760,7 +769,7 @@ local function backOneFrame()
     end
 end
 
--- ========== PLAYBACK ==========
+-- ========== PLAYBACK (pure frame-by-frame) ==========
 local function stopPlayback(keepEditMode)
     state.isPlaying = false
     if state.playbackConnection then state.playbackConnection:Disconnect() state.playbackConnection = nil end
@@ -800,6 +809,12 @@ local function startPlayback()
     state.isPlaying = true
     local playbackIndex = startingIndex
     local totalFrames = #state.currentTAS
+    -- Time anchor: the first keyframe's time is the playback "time zero".
+    -- Each step calculates elapsed = tick() - startTick and processes the keyframe whose .time
+    -- <= elapsed. This ensures playback speed always matches the real recording time,
+    -- regardless of Stepped deltaTime variations.
+    local startTick = tick()
+    local firstFrameTime = state.currentTAS[startingIndex] and state.currentTAS[startingIndex].time or 0
 
     if state.playbackConnection then state.playbackConnection:Disconnect() end
     state.playbackConnection = rs.Stepped:Connect(function()
@@ -811,6 +826,13 @@ local function startPlayback()
         if playbackIndex > totalFrames then
             stopPlayback(false); return
         end
+
+        -- Tempo decorrido desde o início do playback, alinhado ao tempo do primeiro frame
+        local elapsed = (tick() - startTick) + firstFrameTime
+
+        -- Avança o índice até o frame cujo tempo ainda não passou (máx 1 por step)
+        -- Isso respeita o tempo real da gravação sem processar múltiplos frames por step
+        if state.currentTAS[playbackIndex].time > elapsed then return end
 
         local frame = state.currentTAS[playbackIndex]
         state.currentFrameIndex = playbackIndex
@@ -856,25 +878,36 @@ local function loadState()
     for _, f in ipairs(checkpoint.frames) do table.insert(state.currentTAS, f) end
     state.currentFrameIndex = checkpoint.frameIndex
     state.accumulatedTime = checkpoint.accumulatedTime
+
+    -- Truncate: no frame beyond the restored index survives
     for i = #state.currentTAS, state.currentFrameIndex + 1, -1 do
         table.remove(state.currentTAS, i)
     end
+
+    -- FIX 1: Clear futureBuffer when loading savestate.
+    -- Any existing futureBuffer from a previous recording session
+    -- contains frames the player decided to discard by reverting to the savestate.
+    -- Stitching it back would reintroduce exactly the wrong frames the player wanted removed.
+    state.futureBuffer = nil
+
     if state.currentTAS[state.currentFrameIndex] then
         applyFrame(state.currentTAS[state.currentFrameIndex])
     end
-    if state.isEditMode then
+
+    -- Keep HRP anchored if in Edit Mode or paused recording
+    if state.isEditMode or state.isPaused then
         local char = player.Character
         local hrp = char and char:FindFirstChild("HumanoidRootPart")
         if hrp then hrp.Anchored = true end
     end
-    print(string.format("[Savestate] Carregado: frame %d / %d", state.currentFrameIndex, #state.currentTAS))
+    print(string.format("[Savestate] Loaded: frame %d / %d", state.currentFrameIndex, #state.currentTAS))
 end
 
 local function popState()
     if #state.savestates > 0 then table.remove(state.savestates, #state.savestates) end
 end
 
--- ========== GRAVAÇÃO / OVERDUB ==========
+-- ========== RECORDING / OVERDUB ==========
 function toggleRecording()
     if state.isPlaying then stopPlayback(true) end
 
@@ -885,13 +918,25 @@ function toggleRecording()
         local char = player.Character
         if char and char:FindFirstChild("HumanoidRootPart") then char.HumanoidRootPart.Anchored = false end
 
+        -- Future stitch (Splice)
+        -- FIX 3: only stitch if futureBuffer is still coherent with the current TAS.
+        -- If the player loaded a savestate during recording, futureBuffer was already cleared
+        -- by loadState(). If we reach here with a valid futureBuffer, stitch normally.
         if state.futureBuffer and #state.futureBuffer > 0 then
             if #state.currentTAS > 0 then
                 local ultimo = state.currentTAS[#state.currentTAS]
-                local offset = (ultimo.time + 0.016666) - state.futureBuffer[1].time
-                for _, f in ipairs(state.futureBuffer) do
-                    f.time = f.time + offset
-                    table.insert(state.currentTAS, f)
+                local primeiroFuturo = state.futureBuffer[1]
+                -- Only stitch if the future starts after the last recorded frame
+                -- (ensures no overlap or temporal regression)
+                if primeiroFuturo.time >= ultimo.time then
+                    local offset = (ultimo.time + 0.016666) - primeiroFuturo.time
+                    for _, f in ipairs(state.futureBuffer) do
+                        f.time = f.time + offset
+                        table.insert(state.currentTAS, f)
+                    end
+                    print("Splice complete: " .. #state.futureBuffer .. " future frames stitched.")
+                else
+                    print("Splice discarded: futureBuffer incoherent with current TAS.")
                 end
             else
                 for _, f in ipairs(state.futureBuffer) do
@@ -900,12 +945,10 @@ function toggleRecording()
             end
             state.futureBuffer = nil
             saveStateToUndo()
-            print("Splice concluído!")
         end
     else
         if #state.currentTAS > 0 and (state.isEditMode or state.isPaused) then
             saveStateToUndo()
-
             if state.currentFrameIndex > 0 and state.currentFrameIndex < #state.currentTAS then
                 state.futureBuffer = {}
                 for i = state.currentFrameIndex + 1, #state.currentTAS do
@@ -917,7 +960,6 @@ function toggleRecording()
             else
                 state.futureBuffer = nil
             end
-
             state.accumulatedTime = state.currentTAS[state.currentFrameIndex] and state.currentTAS[state.currentFrameIndex].time or 0
             state.isRecording = true
             state.isPaused = false
@@ -941,9 +983,11 @@ function toggleRecording()
             state.cutStartFrameIndex = nil
         end
 
+        -- Recording loop: real deltaTime, raw velocity
         recordingConnection = rs.Stepped:Connect(function(time, deltaTime)
             if not state.isRecording or state.isPaused then return end
 
+            -- Safety lock: remove frames ahead before inserting
             if state.currentFrameIndex < #state.currentTAS then
                 for i = #state.currentTAS, state.currentFrameIndex + 1, -1 do
                     table.remove(state.currentTAS, i)
@@ -960,7 +1004,10 @@ function toggleRecording()
     end
 end
 
--- ========== EXPORTADOR CORRIGIDO (com inputs) ==========
+-- ========== EXPORTER ==========
+-- Always exports with inputs={} for compatibility with the main script.
+-- The main script uses ev.inputs to send keys via VirtualInputManager;
+-- without them the character won't walk, jump or slide correctly during playback.
 local function exportRun()
     if not state.currentTAS or #state.currentTAS == 0 then return end
     local sb = {}
@@ -970,31 +1017,36 @@ local function exportRun()
         for idx, val in ipairs(c) do c[idx] = string.format("%.6f", val) end
         local cfStr = string.format("CFrame.new(%s)", table.concat(c, ","))
         local velStr = string.format("Vector3.new(%.6f, %.6f, %.6f)", ev.velocity.X, ev.velocity.Y, ev.velocity.Z)
-        
-        local inputsStr = "nil"
-        if ev.inputs then
-            inputsStr = string.format("{W=%s, A=%s, S=%s, D=%s, Space=%s, E=%s}",
-                tostring(ev.inputs.W), tostring(ev.inputs.A), tostring(ev.inputs.S),
-                tostring(ev.inputs.D), tostring(ev.inputs.Space), tostring(ev.inputs.E))
-        end
-        
+
+        -- Serialize inputs; ensures they are never nil
+        local inp = ev.inputs or {}
+        local inputsStr = string.format(
+            "{W=%s,A=%s,S=%s,D=%s,Space=%s,E=%s}",
+            tostring(inp.W or false), tostring(inp.A or false),
+            tostring(inp.S or false), tostring(inp.D or false),
+            tostring(inp.Space or false), tostring(inp.E or false)
+        )
+
         table.insert(sb, string.format(
             '    {type="keyframe",time=%f,cframe=%s,velocity=%s,slideActive=%s,wallhopFlick=%s,humanoidState=%d,inputs=%s},\n',
-            ev.time, cfStr, velStr, tostring(ev.slideActive), tostring(ev.wallhopFlick),
-            tonumber(ev.humanoidState) or 8, inputsStr
+            ev.time, cfStr, velStr,
+            tostring(ev.slideActive or false),
+            tostring(ev.wallhopFlick or false),
+            tonumber(ev.humanoidState) or 8,
+            inputsStr
         ))
     end
     table.insert(sb, "}\n")
     local output = table.concat(sb)
     if setclipboard then
         setclipboard(output)
-        print("TAS exportado com inputs incluídos!")
+        print("[TAS COMPILER] Exported with inputs! " .. #state.currentTAS .. " keyframes.")
     else
         print(output)
     end
 end
 
--- ========== CORTE ==========
+-- ========== CUT SYSTEM ==========
 local function executeCut()
     if state.isEditMode and state.isCutMode and state.cutStartFrameIndex then
         local startIdx = math.min(state.cutStartFrameIndex, state.currentFrameIndex)
@@ -1014,11 +1066,11 @@ local function executeCut()
         state.accumulatedTime = (#state.currentTAS > 0) and state.currentTAS[#state.currentTAS].time or 0
         state.isCutMode = false
         state.cutStartFrameIndex = nil
-        print("Corte efetuado!")
+        print("Cut applied!")
     end
 end
 
--- ========== INPUTS ==========
+-- ========== INPUT HANDLERS ==========
 local function isTyping() return uis:GetFocusedTextBox() ~= nil end
 
 uis.InputBegan:Connect(function(input, gpe)
@@ -1034,10 +1086,28 @@ uis.InputBegan:Connect(function(input, gpe)
     elseif input.KeyCode == Enum.KeyCode.Eight then
         if #state.currentTAS > 0 then
             state.isEditMode = not state.isEditMode
-            local char = player.Character
-            local hrp = char and char:FindFirstChild("HumanoidRootPart")
-            if hrp then hrp.Anchored = state.isEditMode end
-            if state.isEditMode and state.isPlaying then stopPlayback(true) end
+            if state.isEditMode then
+                -- FIX 4: when entering Edit Mode from IDLE (after importing or recording),
+                -- position cursor at the last frame, not frame 1 (importer default).
+                -- Prevents the player from unknowingly navigating from frame 1.
+                if state.currentFrameIndex <= 1 then
+                    state.currentFrameIndex = #state.currentTAS
+                end
+                if state.isPlaying then stopPlayback(true) end
+                local char = player.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then
+                    hrp.Anchored = true
+                    -- Teleport to the current frame when entering Edit Mode
+                    if state.currentTAS[state.currentFrameIndex] then
+                        applyFrame(state.currentTAS[state.currentFrameIndex])
+                    end
+                end
+            else
+                local char = player.Character
+                local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                if hrp then hrp.Anchored = false end
+            end
             state.isCutMode = false
         end
     elseif input.KeyCode == Enum.KeyCode.Five then
@@ -1072,7 +1142,7 @@ uis.InputEnded:Connect(function(input)
     if input.KeyCode == Enum.KeyCode.Four then state.holdBack = false end
 end)
 
--- ========== SCRUBBING ACELERADO ==========
+-- ========== ACCELERATED SCRUBBING ==========
 rs.Heartbeat:Connect(function()
     if (state.isPaused and state.isRecording) or state.isEditMode then
         if state.holdBack or state.holdAdvance then
@@ -1093,4 +1163,4 @@ rs.Heartbeat:Connect(function()
     end
 end)
 
-print("TAS CREATOR carregado. Exportação agora inclui inputs para playback perfeito.")
+print("[FE2 TAS CREATOR] Loaded! Capture and playback in native v15.9 standard.")
