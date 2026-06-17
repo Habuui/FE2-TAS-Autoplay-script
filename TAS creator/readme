@@ -1,9 +1,0 @@
-I recommend doing it on a PC, using a Mumu Player emulator, or directly on a PC.
-
-here is: 
-
-loadstring(game:HttpGet('https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/refs/heads/main/TAS%20creator/TAScreator.lua', true))()
-
-execute this in the executor, have fun :)
-
-If you're good at the game and know how to work with TAS, record some TAS files for a few maps and send them to me. It will save me a lot of headaches. Whoever makes a TAS file for a map in record time will have it added to my keyframes folder :)
