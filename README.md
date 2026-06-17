@@ -3,7 +3,7 @@ the script is for the FE2 2023 game, not for the original flood escape 2, if you
 
 execute:
 ```lua
-loadstring(game:HttpGet('https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/script%20(execute)', true))()``
+loadstring(game:HttpGet('https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/script%20(execute)', true))()´´
 
 TAS creator:
 
