@@ -1,5 +1,4 @@
 # FE2-TAS-Autoplay-script
-Plaintext
 The script is for the **FE2 2023** game, not for the original *Flood Escape 2*. If you want to use scripts like this for the original game, I recommend going to this URL: https://github.com/tomatotxt/Flood-GUI
 
 ---
