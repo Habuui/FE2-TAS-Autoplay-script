@@ -20,3 +20,7 @@ I used AI to create the script, and for me, it's quite exciting to have this kin
 This project is intended for educational purposes only. It demonstrates concepts related to movement automation and tool-assisted speedrunning (TAS) in games. The code is provided as-is, and the author does not endorse or encourage any use that violates the terms of service of any game or platform.
 
 Use at your own risk. I am not responsible for any consequences, including account penalties, resulting from the use of this software.
+
+# READ!!!
+
+TAS creator is highly recommended for PC users, and TAS creator has an editing engine that I'm still working on making, so don't test the editing mode, it doesn't work yet, its goal is to take recordings from previous TAS and be able to edit, how to cut, add new moves (on maps, like shortcuts, etc.) to make it faster. I'm still working on this tool... (In the future, players can do their own TAS with my tool, but give me credit.)
