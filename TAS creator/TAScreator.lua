@@ -2,6 +2,18 @@
 --    FE2 TAS CREATOR - OVERDUB & SPLICE SYSTEM
 --    Capture and playback identical to native v15.9 standard.
 --    No slow motion. Playback speed always matches recording.
+--
+--    FIX APPLIED (velocity instability):
+--    The old playback loop only consumed ONE keyframe per RunService.Stepped call.
+--    Under any framerate variance (PC frame drops, or naturally slower devices),
+--    elapsed time could outrun the single-frame-per-tick consumption rate, causing
+--    keyframes to queue up and then burst-play (looks "fast"), or - if Stepped fired
+--    faster than frame spacing - the loop would idle waiting (looks "slow").
+--    FIX: the playback step now drains ALL keyframes whose .time <= elapsed in a
+--    single Stepped call (a while loop instead of a single if-check), applying
+--    only the LAST one drained (the most current state) to avoid redundant physics
+--    writes. This guarantees real-time-accurate playback regardless of device
+--    framerate - the engine is no longer capped at "1 keyframe per tick".
 -- ]]
 
 local player = game.Players.LocalPlayer
@@ -769,7 +781,7 @@ local function backOneFrame()
     end
 end
 
--- ========== PLAYBACK (pure frame-by-frame) ==========
+-- ========== PLAYBACK (real-time accurate, frame-drain engine) ==========
 local function stopPlayback(keepEditMode)
     state.isPlaying = false
     if state.playbackConnection then state.playbackConnection:Disconnect() state.playbackConnection = nil end
@@ -810,9 +822,10 @@ local function startPlayback()
     local playbackIndex = startingIndex
     local totalFrames = #state.currentTAS
     -- Time anchor: the first keyframe's time is the playback "time zero".
-    -- Each step calculates elapsed = tick() - startTick and processes the keyframe whose .time
-    -- <= elapsed. This ensures playback speed always matches the real recording time,
-    -- regardless of Stepped deltaTime variations.
+    -- Each step calculates elapsed = tick() - startTick and DRAINS every keyframe
+    -- whose .time <= elapsed (not just one). This guarantees playback speed always
+    -- matches the real recording time, regardless of Stepped call frequency or
+    -- device framerate - the engine can never "fall behind" and build up delay.
     local startTick = tick()
     local firstFrameTime = state.currentTAS[startingIndex] and state.currentTAS[startingIndex].time or 0
 
@@ -830,19 +843,28 @@ local function startPlayback()
         -- Tempo decorrido desde o início do playback, alinhado ao tempo do primeiro frame
         local elapsed = (tick() - startTick) + firstFrameTime
 
-        -- Avança o índice até o frame cujo tempo ainda não passou (máx 1 por step)
-        -- Isso respeita o tempo real da gravação sem processar múltiplos frames por step
-        if state.currentTAS[playbackIndex].time > elapsed then return end
+        -- FIX: drain ALL keyframes whose .time <= elapsed in this single Stepped call.
+        -- Only the LAST drained frame is actually applied to the character (it's the
+        -- most current state) - earlier ones in the same batch are skipped on purpose,
+        -- they would be visually overwritten anyway. This is what prevents both the
+        -- "fast burst" (frames piling up) and "slow motion" (engine capped at 1/tick)
+        -- symptoms: the loop always catches up to real time in the same tick it falls behind.
+        local frameToApply = nil
+        while playbackIndex <= totalFrames and state.currentTAS[playbackIndex].time <= elapsed do
+            frameToApply = state.currentTAS[playbackIndex]
+            state.currentFrameIndex = playbackIndex
+            playbackIndex = playbackIndex + 1
+        end
 
-        local frame = state.currentTAS[playbackIndex]
-        state.currentFrameIndex = playbackIndex
-        applyFrame(frame)
+        if not frameToApply then return end
+
+        applyFrame(frameToApply)
 
         if cc:FindFirstChild("Humanoid") then
-            pcall(function() cc.Humanoid:ChangeState(frame.humanoidState) end)
+            pcall(function() cc.Humanoid:ChangeState(frameToApply.humanoidState) end)
         end
-        if frame.inputs then
-            for keyName, pressed in pairs(frame.inputs) do
+        if frameToApply.inputs then
+            for keyName, pressed in pairs(frameToApply.inputs) do
                 local keyCode = KEYS[keyName]
                 if keyCode then
                     pcall(function() vim:SendKeyEvent(pressed, keyCode, false, game) end)
@@ -850,7 +872,9 @@ local function startPlayback()
             end
         end
 
-        playbackIndex = playbackIndex + 1
+        if playbackIndex > totalFrames then
+            stopPlayback(false)
+        end
     end)
 end
 
@@ -1163,4 +1187,4 @@ rs.Heartbeat:Connect(function()
     end
 end)
 
-print("[FE2 TAS CREATOR] Loaded! Capture and playback in native v15.9 standard.")
+print("[FE2 TAS CREATOR] Loaded! Capture and playback in native v15.9 standard. (Playback engine fixed: drains all due frames per tick)")
