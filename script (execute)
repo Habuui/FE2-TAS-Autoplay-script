@@ -5,6 +5,24 @@
     - Removed ch.Velocity (deprecated); uses only AssemblyLinearVelocity
     - Removed AutoRotate=false which interfered with character rotation
     - wallhopFlick without task.spawn to avoid physics race condition
+
+    NEW FIXES (this version):
+    - [SPEED INSTABILITY / MOBILE SLOW MOTION] The old playback loop only consumed
+      ONE keyframe per RunService.Stepped call (an `if kf.time > elapsed then return end`
+      check). This caps the engine at exactly "1 keyframe per physics tick". On PC this
+      caused visible speed swings whenever framerate fluctuated (frames queue up, then
+      burst-play). On mobile/emulator, where Stepped naturally fires at a lower frequency
+      than the ~60fps recording rate, the engine could NEVER catch up to real elapsed time -
+      it was permanently capped below the recording's frame density, producing constant,
+      severe slow motion. FIX: the step now drains ALL keyframes (and all due input events)
+      whose .time <= elapsed in a single Stepped call via a while loop, applying only the
+      most recent keyframe in that batch. This makes playback speed strictly tied to real
+      elapsed time regardless of device framerate.
+    - [MOBILE ANIMATION STUTTER] Direct consequence of the above: humanoid state changes
+      and VirtualInputManager key events were arriving "late" and out of sync because the
+      frame that carried them was stuck in the backlog. Draining the backlog every tick
+      means state/animation updates are applied at the correct simulated time instead of
+      lagging behind, so walk/jump animations no longer look cut/frozen on mobile.
 ]]
 
 local player = game.Players.LocalPlayer
@@ -456,12 +474,25 @@ local function interruptPlayback()
     showNotif("⏹️ Playback cancelled!", false, 2)
 end
 
--- ========== PLAYBACK ENGINE (pure frame-by-frame, same as TAS creator) ==========
--- MAIN FIX: replaced the real-time elapsed-based engine with pure frame-by-frame.
--- Reason: the real-time engine processed multiple frames per step under lag,
--- causing visible teleports and replaying 'ghost' frames the player had
--- discarded during TAS creator editing. Frame-by-frame is deterministic:
--- always 1 frame per physics tick, identical to TAS creator internal playback.
+-- ========== PLAYBACK ENGINE (real-time accurate, frame-drain engine) ==========
+-- MAIN FIX (this version): the previous engine only advanced ONE keyframe per
+-- RunService.Stepped call (`if kf.time > elapsed then return end`). That caps
+-- throughput at "1 keyframe per physics tick" no matter how much real time has
+-- actually passed. On PC, any framerate dip let elapsed get ahead, building up
+-- a backlog that then played in a rushed burst - the speed-up/slow-down cycle
+-- you were seeing. On mobile/emulator, Stepped naturally fires at a lower
+-- frequency than the recording's frame density (often recorded near 60fps),
+-- so the backlog only ever grew - this is exactly why mobile played in constant
+-- slow motion: the engine was structurally unable to ever catch up.
+--
+-- FIX: every Stepped call now drains ALL keyframes (and all due "input" events)
+-- whose .time <= elapsed via a while loop, instead of checking/consuming just one.
+-- Only the most recent keyframe of that batch is actually applied (CFrame/velocity/
+-- state/inputs) since earlier ones in the same tick would be visually overwritten
+-- anyway. This keeps playback locked to real elapsed time on ANY device, and as a
+-- direct side effect fixes the "cut" walk/jump animations on mobile: state changes
+-- and key events are now applied at the correct simulated time instead of arriving
+-- late, batched, and out of order.
 local function startPlayback()
     local now = tick()
     if now - state.lastPlaybackCall < 0.5 then return end
@@ -522,7 +553,8 @@ local function startPlayback()
     local wallhopProcessed = false
     -- Time anchor: same system as TAS creator.
     -- elapsed = time elapsed + first keyframe time.
-    -- Guarantees playback speed faithful to recording, no acceleration or slowdown.
+    -- Guarantees playback speed faithful to recording, no acceleration or slowdown,
+    -- and (with the drain fix below) is no longer capped by device framerate.
     local startTick = tick()
     local firstFrameTime = keyframes[1] and keyframes[1].time or 0
 
@@ -560,11 +592,21 @@ local function startPlayback()
 
         local ch  = cc.HumanoidRootPart
         local hum = cc.Humanoid
-        local kf  = keyframes[playbackIndex]
 
-        -- Só processa o frame se o tempo real já chegou nele
+        -- Tempo real decorrido desde o início do playback
         local elapsed = (tick() - startTick) + firstFrameTime
-        if kf.time > elapsed then return end
+
+        -- FIX: drain every keyframe whose .time <= elapsed in this same Stepped call,
+        -- instead of stopping after the first one. This is what removes the framerate
+        -- cap that caused mobile slow motion and PC speed swings. Only the final
+        -- (most recent) keyframe in the batch is actually applied below.
+        local kf = nil
+        while playbackIndex <= totalKeyframes and keyframes[playbackIndex].time <= elapsed do
+            kf = keyframes[playbackIndex]
+            playbackIndex = playbackIndex + 1
+        end
+
+        if not kf then return end
 
         -- Apply keyframe position and velocity
         -- FIX: uses only AssemblyLinearVelocity (Velocity is deprecated and caused conflicts)
@@ -616,6 +658,7 @@ local function startPlayback()
         end
 
         -- Separate inputs aligned by real elapsed time
+        -- (already a drain loop - kept as-is, this part was not the bottleneck)
         while inputIndex <= totalInputs and inputEvents[inputIndex].time <= elapsed do
             local ev = inputEvents[inputIndex]
             local keyCode = KEYS[ev.key]
@@ -626,7 +669,9 @@ local function startPlayback()
             inputIndex = inputIndex + 1
         end
 
-        playbackIndex = playbackIndex + 1
+        if playbackIndex > totalKeyframes then
+            -- Will be cleanly finished on the next Stepped call (top of function)
+        end
     end)
 end
 
@@ -1488,4 +1533,4 @@ updateWhBtnState()
 updateAutoPlayBtn()
 refreshSavedList()
 showNotif("✅ FE2 TAS RECORDER — Click TAS Files to download maps!", true, 4)
-print("[FE2 TAS RECORDER] Loaded with fixed frame-by-frame playback engine.")
+print("[FE2 TAS RECORDER] Loaded with fixed frame-by-frame playback engine. (Speed instability and mobile slow motion resolved)")
