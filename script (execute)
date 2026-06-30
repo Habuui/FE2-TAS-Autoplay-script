@@ -7,22 +7,12 @@
     - wallhopFlick without task.spawn to avoid physics race condition
 
     NEW FIXES (this version):
-    - [SPEED INSTABILITY / MOBILE SLOW MOTION] The old playback loop only consumed
-      ONE keyframe per RunService.Stepped call (an `if kf.time > elapsed then return end`
-      check). This caps the engine at exactly "1 keyframe per physics tick". On PC this
-      caused visible speed swings whenever framerate fluctuated (frames queue up, then
-      burst-play). On mobile/emulator, where Stepped naturally fires at a lower frequency
-      than the ~60fps recording rate, the engine could NEVER catch up to real elapsed time -
-      it was permanently capped below the recording's frame density, producing constant,
-      severe slow motion. FIX: the step now drains ALL keyframes (and all due input events)
-      whose .time <= elapsed in a single Stepped call via a while loop, applying only the
-      most recent keyframe in that batch. This makes playback speed strictly tied to real
-      elapsed time regardless of device framerate.
-    - [MOBILE ANIMATION STUTTER] Direct consequence of the above: humanoid state changes
-      and VirtualInputManager key events were arriving "late" and out of sync because the
-      frame that carried them was stuck in the backlog. Draining the backlog every tick
-      means state/animation updates are applied at the correct simulated time instead of
-      lagging behind, so walk/jump animations no longer look cut/frozen on mobile.
+    - [SPEED INSTABILITY / MOBILE SLOW MOTION] Fixed by draining ALL keyframes
+      whose .time <= elapsed in a single Stepped call via a while loop.
+    - [MOBILE ANIMATION STUTTER] Fixed as direct consequence of the above.
+    - [PRIVATE REPO ACCESS] API and raw URLs now use token-in-URL auth format,
+      same pattern used by the executor's loadstring call. The token is read from
+      getgenv().GH_TOKEN so it only needs to be set once by the executor/loader.
 ]]
 
 local player = game.Players.LocalPlayer
@@ -36,8 +26,31 @@ local ts = game:GetService("TweenService")
 local DEFAULT_WALK_SPEED = 20
 local DEFAULT_JUMP_POWER = 50
 
-local KEYFRAMES_BASE_URL = "https://raw.githubusercontent.com/Habuui/FE2-TAS-Autoplay-script/main/keyframes/"
-local API_URL = "https://api.github.com/repos/Habuui/FE2-TAS-Autoplay-script/contents/keyframes"
+-- Token é lido do ambiente global — o executor/loader define getgenv().GH_TOKEN
+-- antes de rodar este script (ex: getgenv().GH_TOKEN = "ghp_xxx")
+local GH_TOKEN = getgenv().GH_TOKEN or ""
+
+local REPO_PATH = "Habuui/FE2-TAS-Autoplay-script"
+
+-- URLs com token embutido (mesmo padrão do loadstring que já funciona)
+local function makeRawUrl(filePath)
+    if GH_TOKEN ~= "" then
+        return string.format("https://%s@raw.githubusercontent.com/%s/main/%s", GH_TOKEN, REPO_PATH, filePath)
+    else
+        return string.format("https://raw.githubusercontent.com/%s/main/%s", REPO_PATH, filePath)
+    end
+end
+
+local function makeApiUrl(apiPath)
+    if GH_TOKEN ~= "" then
+        return string.format("https://%s@api.github.com/repos/%s/%s", GH_TOKEN, REPO_PATH, apiPath)
+    else
+        return string.format("https://api.github.com/repos/%s/%s", REPO_PATH, apiPath)
+    end
+end
+
+local KEYFRAMES_BASE_URL = makeRawUrl("keyframes/")
+local API_URL = makeApiUrl("contents/keyframes")
 
 local KEYS = {
     W = Enum.KeyCode.W,
@@ -193,7 +206,7 @@ tabBar.Parent           = main
 local tabs        = {"🎮 Record", "💾 Saves", "🏃 Player", "📁 TAS Files", "🐛 Bugs"}
 local tabButtons  = {}
 local tabContents = {}
-local currentTabName = "🎮 Gravar"
+local currentTabName = "🎮 Record"
 
 local function switchTab(tabName)
     if state.isMinimized then return end
@@ -338,7 +351,7 @@ local recordingStartTime = 0
 local inputConnections   = nil
 
 local function startRecording()
-    if state.isRecording then showNotif("❌ Já gravando!", false); return end
+    if state.isRecording then showNotif("❌ Already recording!", false); return end
     if state.isPlaying then
         state.isPlaying = false
         if state.playbackConnection then
@@ -474,25 +487,7 @@ local function interruptPlayback()
     showNotif("⏹️ Playback cancelled!", false, 2)
 end
 
--- ========== PLAYBACK ENGINE (real-time accurate, frame-drain engine) ==========
--- MAIN FIX (this version): the previous engine only advanced ONE keyframe per
--- RunService.Stepped call (`if kf.time > elapsed then return end`). That caps
--- throughput at "1 keyframe per physics tick" no matter how much real time has
--- actually passed. On PC, any framerate dip let elapsed get ahead, building up
--- a backlog that then played in a rushed burst - the speed-up/slow-down cycle
--- you were seeing. On mobile/emulator, Stepped naturally fires at a lower
--- frequency than the recording's frame density (often recorded near 60fps),
--- so the backlog only ever grew - this is exactly why mobile played in constant
--- slow motion: the engine was structurally unable to ever catch up.
---
--- FIX: every Stepped call now drains ALL keyframes (and all due "input" events)
--- whose .time <= elapsed via a while loop, instead of checking/consuming just one.
--- Only the most recent keyframe of that batch is actually applied (CFrame/velocity/
--- state/inputs) since earlier ones in the same tick would be visually overwritten
--- anyway. This keeps playback locked to real elapsed time on ANY device, and as a
--- direct side effect fixes the "cut" walk/jump animations on mobile: state changes
--- and key events are now applied at the correct simulated time instead of arriving
--- late, batched, and out of order.
+-- ========== PLAYBACK ENGINE ==========
 local function startPlayback()
     local now = tick()
     if now - state.lastPlaybackCall < 0.5 then return end
@@ -507,7 +502,6 @@ local function startPlayback()
     local humanoid = char:FindFirstChild("Humanoid")
     if not hrp or not humanoid then return end
 
-    -- Filter only keyframes to position character at the start
     local firstKF = nil
     for _, ev in ipairs(state.currentTAS) do
         if ev.type == "keyframe" then firstKF = ev; break end
@@ -517,7 +511,6 @@ local function startPlayback()
         hrp.AssemblyLinearVelocity = Vector3.zero
     end
 
-    -- Save original RootJoint for wallhop
     local rootJoint = char:FindFirstChild("RootJoint", true)
     if rootJoint then state.originalRootC0 = rootJoint.C0 else state.originalRootC0 = nil end
 
@@ -531,8 +524,6 @@ local function startPlayback()
     state.isPlaying = true
     showNotif("▶️ PLAYING...", true)
 
-    -- Separate keyframes from inputs for the frame-by-frame engine
-    -- and apply inputs embedded in each keyframe (inputs={} field)
     local keyframes   = {}
     local inputEvents = {}
     for _, ev in ipairs(state.currentTAS) do
@@ -551,10 +542,6 @@ local function startPlayback()
     for k in pairs(KEYS) do lastApplied[k] = false end
     local lastSlideState  = false
     local wallhopProcessed = false
-    -- Time anchor: same system as TAS creator.
-    -- elapsed = time elapsed + first keyframe time.
-    -- Guarantees playback speed faithful to recording, no acceleration or slowdown,
-    -- and (with the drain fix below) is no longer capped by device framerate.
     local startTick = tick()
     local firstFrameTime = keyframes[1] and keyframes[1].time or 0
 
@@ -570,7 +557,6 @@ local function startPlayback()
         end
 
         if playbackIndex > totalKeyframes then
-            -- Release all keys on finish
             for key, code in pairs(KEYS) do
                 if lastApplied[key] then
                     pcall(function() vim:SendKeyEvent(false, code, false, game) end)
@@ -592,14 +578,8 @@ local function startPlayback()
 
         local ch  = cc.HumanoidRootPart
         local hum = cc.Humanoid
-
-        -- Tempo real decorrido desde o início do playback
         local elapsed = (tick() - startTick) + firstFrameTime
 
-        -- FIX: drain every keyframe whose .time <= elapsed in this same Stepped call,
-        -- instead of stopping after the first one. This is what removes the framerate
-        -- cap that caused mobile slow motion and PC speed swings. Only the final
-        -- (most recent) keyframe in the batch is actually applied below.
         local kf = nil
         while playbackIndex <= totalKeyframes and keyframes[playbackIndex].time <= elapsed do
             kf = keyframes[playbackIndex]
@@ -608,24 +588,19 @@ local function startPlayback()
 
         if not kf then return end
 
-        -- Apply keyframe position and velocity
-        -- FIX: uses only AssemblyLinearVelocity (Velocity is deprecated and caused conflicts)
         if kf.cframe then ch.CFrame = kf.cframe end
         if kf.velocity then ch.AssemblyLinearVelocity = kf.velocity end
 
-        -- Apply Humanoid state
         if kf.humanoidState then
             local stateVal = type(kf.humanoidState) == "number" and kf.humanoidState or kf.humanoidState.Value
             pcall(function() hum:ChangeState(stateVal) end)
         end
 
-        -- Slide (E key)
         if kf.slideActive ~= nil and kf.slideActive ~= lastSlideState then
             lastSlideState = kf.slideActive
             pcall(function() vim:SendKeyEvent(kf.slideActive, Enum.KeyCode.E, false, game) end)
         end
 
-        -- Wallhop: no task.spawn to avoid physics race condition
         if state.wallhopEnabled and kf.wallhopFlick and not wallhopProcessed then
             wallhopProcessed = true
             pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
@@ -634,19 +609,15 @@ local function startPlayback()
             if rj and state.originalRootC0 then
                 local orig = state.originalRootC0
                 pcall(function() rj.C0 = orig * CFrame.Angles(0, 0, math.rad(65)) end)
-                -- The visual flick is undone automatically on the next frame
-                -- since the next applyFrame will restore the correct position
             end
         elseif not kf.wallhopFlick then
             wallhopProcessed = false
-            -- Restore RootJoint if it was flicked on the previous frame
             local rj = cc:FindFirstChild("RootJoint", true)
             if rj and state.originalRootC0 then
                 pcall(function() rj.C0 = state.originalRootC0 end)
             end
         end
 
-        -- Inputs embedded in keyframe (inputs={W,A,S,D,Space,E} field)
         if kf.inputs then
             for keyName, pressed in pairs(kf.inputs) do
                 local keyCode = KEYS[keyName]
@@ -657,8 +628,6 @@ local function startPlayback()
             end
         end
 
-        -- Separate inputs aligned by real elapsed time
-        -- (already a drain loop - kept as-is, this part was not the bottleneck)
         while inputIndex <= totalInputs and inputEvents[inputIndex].time <= elapsed do
             local ev = inputEvents[inputIndex]
             local keyCode = KEYS[ev.key]
@@ -667,10 +636,6 @@ local function startPlayback()
                 pcall(function() vim:SendKeyEvent(ev.state, keyCode, false, game) end)
             end
             inputIndex = inputIndex + 1
-        end
-
-        if playbackIndex > totalKeyframes then
-            -- Will be cleanly finished on the next Stepped call (top of function)
         end
     end)
 end
@@ -755,10 +720,10 @@ end
 
 local function exportCurrentTAS(mapName)
     if not state.currentTAS or #state.currentTAS == 0 then
-        showNotif("❌ Nenhum TAS na memória para exportar!", false, 2)
+        showNotif("❌ No TAS in memory to export!", false, 2)
         return
     end
-    if not mapName or mapName == "" then mapName = "mapa_desconhecido" end
+    if not mapName or mapName == "" then mapName = "unknown_map" end
 
     local lines = {}
     table.insert(lines, "return {")
@@ -814,6 +779,11 @@ local function exportCurrentTAS(mapName)
 end
 
 -- ========== GITHUB — ON-DEMAND DOWNLOAD ==========
+-- Usa token-in-URL para autenticar com repo privado.
+-- O token é lido de getgenv().GH_TOKEN (definido pelo executor/loader antes deste script).
+-- As URLs seguem o mesmo padrão que já funciona no loadstring do executor:
+--   https://TOKEN@raw.githubusercontent.com/USER/REPO/main/PATH
+--   https://TOKEN@api.github.com/repos/USER/REPO/contents/PATH
 local availableMaps = {}
 local refreshGitList
 
@@ -834,6 +804,12 @@ local function loadMapListFromGitHub()
             return
         end
 
+        -- A API do GitHub retorna erro como objeto com campo "message" em vez de array
+        if data.message then
+            showNotif("❌ GitHub API: " .. tostring(data.message), false, 4)
+            return
+        end
+
         local arquivos = {}
         for _, item in ipairs(data) do
             if item.type == "file" and item.name:sub(-4) == ".lua" then
@@ -849,6 +825,7 @@ local function loadMapListFromGitHub()
             return
         end
 
+        -- Progress bar GUI
         local progressGui = Instance.new("ScreenGui")
         progressGui.Name         = "FE2_TAS_Progress"
         progressGui.ResetOnSpawn = false
@@ -923,11 +900,12 @@ local function loadMapListFromGitHub()
         for idx, nomeMapa in ipairs(arquivos) do
             local progRatio = (idx - 1) / total
             local pct = math.floor(progRatio * 100)
-            progLabel.Text = "📥 Baixando: " .. nomeMapa .. ".lua"
+            progLabel.Text = "📥 Downloading: " .. nomeMapa .. ".lua"
             barFill.Size   = UDim2.new(progRatio, 0, 1, 0)
             barText.Text   = (idx - 1) .. "/" .. total .. " (" .. pct .. "%)"
 
-            local url = KEYFRAMES_BASE_URL .. nomeMapa .. ".lua"
+            -- Constrói a URL com token para cada keyframe
+            local url = makeRawUrl("keyframes/" .. nomeMapa .. ".lua")
             local okD, codigo = pcall(function() return game:HttpGet(url, true) end)
 
             if okD and codigo and codigo ~= "" then
@@ -1104,7 +1082,7 @@ local frameLabel = Instance.new("TextLabel")
 frameLabel.Size = UDim2.new(1, -20, 0, 20)
 frameLabel.Position = UDim2.new(0, 10, 0, 92)
 frameLabel.BackgroundTransparency = 1
-frameLabel.Text = "📹 Eventos na Memória: 0"
+frameLabel.Text = "📹 Events in Memory: 0"
 frameLabel.TextColor3 = Color3.fromRGB(140, 140, 160)
 frameLabel.Font = Enum.Font.Gotham
 frameLabel.TextSize = 11
@@ -1280,7 +1258,7 @@ function refreshSavedList()
         loadB.Size = UDim2.new(0.22, 0, 0.8, 0)
         loadB.Position = UDim2.new(0.52, 0, 0.1, 0)
         loadB.BackgroundColor3 = Color3.fromRGB(30, 80, 140)
-        loadB.Text = "Carregar"
+        loadB.Text = "Load"
         loadB.TextColor3 = Color3.fromRGB(255, 255, 255)
         loadB.Font = Enum.Font.GothamBold
         loadB.TextSize = 9
@@ -1291,7 +1269,7 @@ function refreshSavedList()
         delB.Size = UDim2.new(0.22, 0, 0.8, 0)
         delB.Position = UDim2.new(0.76, 0, 0.1, 0)
         delB.BackgroundColor3 = Color3.fromRGB(120, 30, 30)
-        delB.Text = "Deletar"
+        delB.Text = "Delete"
         delB.TextColor3 = Color3.fromRGB(255, 255, 255)
         delB.Font = Enum.Font.GothamBold
         delB.TextSize = 9
@@ -1347,6 +1325,18 @@ whToggle.MouseButton1Click:Connect(function() state.wallhopEnabled = not state.w
 -- ========== UI - TAS FILES TAB ==========
 local gitContainer = tabContents[4]
 
+-- Label mostrando status do token
+local tokenStatusLabel = Instance.new("TextLabel")
+tokenStatusLabel.Size = UDim2.new(1, -20, 0, 22)
+tokenStatusLabel.Position = UDim2.new(0, 10, 0, 52)
+tokenStatusLabel.BackgroundTransparency = 1
+tokenStatusLabel.TextColor3 = GH_TOKEN ~= "" and Color3.fromRGB(80, 220, 120) or Color3.fromRGB(255, 160, 60)
+tokenStatusLabel.Text = GH_TOKEN ~= "" and "🔑 Token OK — private repo access enabled" or "⚠️ No token found (getgenv().GH_TOKEN not set)"
+tokenStatusLabel.Font = Enum.Font.Gotham
+tokenStatusLabel.TextSize = 10
+tokenStatusLabel.TextXAlignment = Enum.TextXAlignment.Left
+tokenStatusLabel.Parent = gitContainer
+
 local gitRefreshBtn = Instance.new("TextButton")
 gitRefreshBtn.Size = UDim2.new(0.8, 0, 0, 35)
 gitRefreshBtn.Position = UDim2.new(0.1, 0, 0, 10)
@@ -1360,8 +1350,8 @@ Instance.new("UICorner", gitRefreshBtn).CornerRadius = UDim.new(0, 6)
 addHoverEffect(gitRefreshBtn, Color3.fromRGB(90, 30, 140), Color3.fromRGB(120, 50, 180))
 
 local gitScroll = Instance.new("ScrollingFrame")
-gitScroll.Size = UDim2.new(1, -20, 1, -60)
-gitScroll.Position = UDim2.new(0, 10, 0, 55)
+gitScroll.Size = UDim2.new(1, -20, 1, -82)
+gitScroll.Position = UDim2.new(0, 10, 0, 80)
 gitScroll.BackgroundTransparency = 1
 gitScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 gitScroll.ScrollBarThickness = 2
@@ -1379,10 +1369,11 @@ function refreshGitList()
         local empty = Instance.new("TextLabel")
         empty.Size = UDim2.new(1, 0, 0, 40)
         empty.BackgroundTransparency = 1
-        empty.Text = "No .lua files found."
+        empty.Text = "No .lua files found. Click 'LOAD / UPDATE MAP LIST'."
         empty.TextColor3 = Color3.fromRGB(130, 130, 150)
         empty.Font = Enum.Font.Gotham
         empty.TextSize = 11
+        empty.TextWrapped = true
         empty.Parent = gitScroll
         gitScroll.CanvasSize = UDim2.new(0, 0, 0, 45)
         return
@@ -1410,7 +1401,7 @@ function refreshGitList()
         loadB.Size = UDim2.new(0.25, 0, 0.8, 0)
         loadB.Position = UDim2.new(0.72, 0, 0.1, 0)
         loadB.BackgroundColor3 = Color3.fromRGB(0, 120, 150)
-        loadB.Text = "Carregar"
+        loadB.Text = "Load"
         loadB.TextColor3 = Color3.fromRGB(255, 255, 255)
         loadB.Font = Enum.Font.GothamBold
         loadB.TextSize = 9
@@ -1427,15 +1418,20 @@ function refreshGitList()
                 showNotif("📂 Loaded from memory: " .. capMap, true)
                 return
             end
-            local url = KEYFRAMES_BASE_URL .. capMap .. ".lua"
+            -- Download individual com token
+            local url = makeRawUrl("keyframes/" .. capMap .. ".lua")
             showNotif("⏳ Downloading " .. capMap .. "...", true, 1.5)
             task.spawn(function()
                 local ok, code = pcall(function() return game:HttpGet(url, true) end)
-                if not ok or not code then showNotif("❌ Failed to download: " .. capMap, false, 2); return end
+                if not ok or not code or code == "" then
+                    showNotif("❌ Failed to download: " .. capMap, false, 2); return
+                end
                 local func, err = loadstring(code)
-                if not func then showNotif("❌ File error.", false, 2); return end
-                local tasData = func()
-                if type(tasData) == "table" and #tasData > 0 then
+                if not func then
+                    showNotif("❌ File error: " .. tostring(err), false, 2); return
+                end
+                local okF, tasData = pcall(func)
+                if okF and type(tasData) == "table" and #tasData > 0 then
                     savedTAS[capMap]        = tasData
                     getgenv().FE2_TAS_SAVES = savedTAS
                     state.currentTAS        = tasData
@@ -1532,5 +1528,8 @@ updateWcBtnState()
 updateWhBtnState()
 updateAutoPlayBtn()
 refreshSavedList()
-showNotif("✅ FE2 TAS RECORDER — Click TAS Files to download maps!", true, 4)
-print("[FE2 TAS RECORDER] Loaded with fixed frame-by-frame playback engine. (Speed instability and mobile slow motion resolved)")
+refreshGitList()
+
+local tokenMsg = GH_TOKEN ~= "" and "Token OK! Click TAS Files to download maps." or "No token! Set getgenv().GH_TOKEN before running."
+showNotif("✅ FE2 TAS RECORDER — " .. tokenMsg, GH_TOKEN ~= "", 5)
+print("[FE2 TAS] Loaded. Token: " .. (GH_TOKEN ~= "" and "SET ✓" or "NOT SET ✗") .. " | Repo: " .. REPO_PATH)
